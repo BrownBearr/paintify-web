@@ -293,7 +293,8 @@ EMSCRIPTEN_KEEPALIVE const char* pfy_load_look(const char* text) {
     while (lineStart < contents.size()) {
         const size_t lineEnd = contents.find('\n', lineStart);
         const size_t length = (lineEnd == std::string::npos ? contents.size() : lineEnd) - lineStart;
-        const std::string line = contents.substr(lineStart, length);
+        std::string line = contents.substr(lineStart, length);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line == enabled) { g_tensorOn = true; foundTensorSwitch = true; break; }
         if (line == disabled) { g_tensorOn = false; foundTensorSwitch = true; break; }
         if (lineEnd == std::string::npos) break;

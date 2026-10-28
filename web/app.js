@@ -386,6 +386,7 @@ function stopRecording() {
 async function exportVideo() {
   if (exporting) { exporting.cancel = true; exporting.controller.abort(); return; }
   if (src.kind !== 'video') return;
+  if (!Number.isFinite(video.duration) || video.duration <= 0) { notice('Wait for a video with a known duration before exporting.', true); return; }
   if (!window.VideoEncoder) { notice('This browser cannot encode video (WebCodecs). Try Chrome, Edge or Safari.', true); return; }
   const w = src.w, h = src.h;
   const d = [...src.frameDeltas].sort((a, b) => a - b);
