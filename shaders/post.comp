@@ -152,14 +152,15 @@ vec3 experimentalColor(vec2 p, vec3 rgb) {
     float size = clamp(ST_EXPERIMENT_SCALE, 3.0, 48.0);
     int mode = int(ST_EXPERIMENT_MODE + 0.5);
 
-    if (mode == 1) { // tone-built, field-aligned engraving
+    if (mode == 1) { // tone-built, fixed-angle engraving
         float darkness = 1.0 - luma(textureLod(uSrc, p / IMG_SIZE, 0.0).rgb);
-        vec2 tangent = fieldDir(p);
-        vec2 normal = vec2(-tangent.y, tangent.x);
-        float first = hatchLine(p, normal, size, max(0.65, size * 0.085));
-        vec2 crossNormal = vec2(normal.x * 0.5 - normal.y * 0.8660254,
-                                normal.x * 0.8660254 + normal.y * 0.5);
-        float second = hatchLine(p, crossNormal, size, max(0.65, size * 0.085));
+        // Fixed 45° / 135° line families avoid phase breaks from a rapidly
+        // varying per-pixel direction field.
+        const vec2 normal45 = vec2(0.70710678, 0.70710678);
+        const vec2 normal135 = vec2(-0.70710678, 0.70710678);
+        float lineWidth = max(0.65, size * 0.085);
+        float first = hatchLine(p, normal45, size, lineWidth);
+        float second = hatchLine(p, normal135, size, lineWidth);
         float tone1 = smoothstep(0.18, 0.72, darkness);
         float tone2 = smoothstep(0.52, 0.92, darkness);
         float ink = max(first * tone1, second * tone2);
