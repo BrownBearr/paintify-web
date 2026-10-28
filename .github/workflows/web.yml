@@ -2,7 +2,7 @@ name: Web
 
 # Builds the browser version (WebAssembly + WebGPU), paints every brush in
 # headless Chromium on SwiftShader, walks through the app, and publishes it
-# to GitHub Pages from main.
+# from main to the gh-pages branch, which GitHub Pages serves.
 on:
   push:
     branches: [main, "claude/**"]
@@ -21,6 +21,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -74,21 +76,13 @@ jobs:
           name: web-test-output
           path: out/
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Publish to gh-pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        with:
-          path: web/dist
-
-  deploy:
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4
+        run: |
+          cd web/dist
+          touch .nojekyll
+          git init -q -b gh-pages
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "Publish ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" gh-pages

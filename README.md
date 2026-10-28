@@ -11,8 +11,6 @@
 
 <p align="center">
   <a href="https://brownbearr.github.io/paintify-web/"><b>Open Paintify</b></a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/BrownBearr/paintify-GPU#download">Desktop app for Mac and Windows</a>
 </p>
 
 <p align="center">
@@ -41,8 +39,8 @@ More than twenty brushes inspired by the history of painting: Van Gogh's rhythmi
 
 ## What you need
 
-A current Chrome, Edge or Arc on Mac, Windows or ChromeOS, or Safari 26. Paintify needs a graphics card with WebGPU, which every recent desktop and laptop has. Looks you save here open in the [desktop app](https://github.com/BrownBearr/paintify-GPU) too, and the other way round.
+A current Chrome, Edge or Arc on Mac, Windows or ChromeOS, or Safari 26. Paintify needs a graphics card with WebGPU, which every recent desktop and laptop has.
 
 ---
 
-<sub>The same painter as <a href="https://github.com/BrownBearr/paintify-GPU">Paintify for Mac and Windows</a>, compiled to WebAssembly. Developers: see <a href="docs/BUILDING.md">building for the web</a>. Example photos: Chelsea the cat (Stefan van der Walt) and espresso cup (Rachel Michetti), both CC0; Falcon 9 launch (SpaceX), public domain. Fonts: Schibsted Grotesk and Geist Mono, SIL OFL 1.1. MP4 muxing: mp4-muxer, MIT.</sub>
+<sub>Developers: see <a href="docs/BUILDING.md">building for the web</a>. Example photos: Chelsea the cat (Stefan van der Walt) and espresso cup (Rachel Michetti), both CC0; Falcon 9 launch (SpaceX), public domain. Fonts: Schibsted Grotesk and Geist Mono, SIL OFL 1.1. MP4 muxing: mp4-muxer, MIT.</sub>
