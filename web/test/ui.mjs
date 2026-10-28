@@ -49,11 +49,63 @@ await shot('3-vangogh');
 await page.click('#view-mode [data-mode="1"]');
 await page.waitForTimeout(1500);
 await shot('4-split');
+
+// Controls announce actual availability and retain direction choices.
+await page.locator('.section').filter({ has: page.locator('summary', { hasText: /^Strokes$/ }) }).locator('.disclosure > summary').click();
+const pattern = page.getByRole('slider', { name: 'Pattern strength', exact: true });
+if (!(await pattern.isDisabled())) errors.push('Pattern strength must be disabled for Follow image');
+const swirl = page.getByRole('switch', { name: 'Centre swirl on brightest area' });
+if (!(await swirl.isDisabled())) errors.push('Swirl control must be disabled outside Swirl');
+await page.getByLabel('Direction source', { exact: true }).selectOption('1');
+if (await pattern.isDisabled() || await swirl.isDisabled()) errors.push('Swirl controls did not become available');
+await page.getByLabel('Direction source', { exact: true }).selectOption('0');
+await page.getByRole('button', { name: 'Samples', exact: true }).focus();
+await page.keyboard.press('ArrowDown');
+if (await page.getByRole('button', { name: 'Samples', exact: true }).getAttribute('aria-expanded') !== 'true') errors.push('Menu expanded state missing');
+await page.keyboard.press('Escape');
+if (await page.getByRole('button', { name: 'Samples', exact: true }).getAttribute('aria-expanded') !== 'false') errors.push('Escape did not close menu');
+
+await page.locator('.section > summary').filter({ hasText: /^Experimental$/ }).click();
+const experiment = page.getByRole('switch', { name: 'Experimental effects', exact: true });
+if (await experiment.isChecked()) errors.push('Experimental UI defaults on');
+await experiment.check();
+for (const mode of ['0', '1', '2']) {
+  await page.getByLabel('Experimental algorithm', { exact: true }).selectOption(mode);
+  await page.waitForTimeout(500);
+  await shot(`experimental-${mode}`);
+}
+await experiment.uncheck();
+
+await page.setViewportSize({ width: 390, height: 844 });
+await shot('mobile-settings');
+await page.click('#settings-btn');
+if (await page.locator('#panel').isVisible()) errors.push('Mobile settings did not collapse');
+await shot('mobile-canvas');
+await page.click('#settings-btn');
+await page.setViewportSize({ width: 740, height: 390 });
+await shot('mobile-landscape');
+await page.setViewportSize({ width: 1440, height: 900 });
+await page.emulateMedia({ colorScheme: 'dark' });
+await shot('dark');
+await page.emulateMedia({ colorScheme: 'light' });
+
 await page.click('#samples > .btn');
 await page.click('#samples [data-sample="media/cat.mp4"]');
 await page.waitForFunction(() => /fps/.test(document.getElementById('hud').textContent), null, { timeout: 120000 });
 await page.waitForTimeout(20000);
 await shot('5-video');
+
+// Missing API is a clear capability error; cancellation restores locked UI.
+await page.evaluate(() => { window.savedEncoder = window.VideoEncoder; window.VideoEncoder = undefined; });
+await page.click('#record-btn');
+await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('cannot encode video'));
+await page.evaluate(() => { window.VideoEncoder = window.savedEncoder; delete window.savedEncoder; });
+await page.click('#record-btn');
+await page.waitForFunction(() => document.querySelector('#record-btn').textContent === 'Cancel export');
+if (!(await page.locator('#open-btn').isDisabled())) errors.push('Source controls not locked during export');
+await page.click('#record-btn');
+await page.waitForFunction(() => document.querySelector('#record-btn').textContent === 'Export video');
+if (await page.locator('#open-btn').isDisabled()) errors.push('Cancel did not restore controls');
 
 // Exporting a file paints every frame and downloads an MP4.
 const t0 = Date.now();
@@ -66,6 +118,30 @@ await expDl.saveAs(expPath);
 const expSize = fs.statSync(expPath).size;
 console.log('exported', expDl.suggestedFilename(), expSize, 'bytes in', Math.round((Date.now() - t0) / 1000), 's |', await page.textContent('#notice'));
 if (expSize < 10000) errors.push('exported video is empty');
+// Decode the download and inspect a real frame, rather than accepting size alone.
+const decoded = await page.evaluate(async b64 => {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'video/mp4' }));
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'auto';
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Export decode timeout')), 15000);
+      v.onloadeddata = () => { clearTimeout(timer); resolve(); };
+      v.onerror = () => { clearTimeout(timer); reject(new Error('Export could not decode')); };
+      v.src = url;
+    });
+    const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+    const cx = c.getContext('2d'); cx.drawImage(v, 0, 0);
+    const rgba = cx.getImageData(0, 0, c.width, c.height).data;
+    let sum = 0, square = 0;
+    for (let i = 0; i < rgba.length; i += 4) { const l = (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3; sum += l; square += l * l; }
+    const n = rgba.length / 4, mean = sum / n;
+    return { width: v.videoWidth, height: v.videoHeight, duration: v.duration, mean, variance: square / n - mean * mean };
+  } finally { v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url); }
+}, fs.readFileSync(expPath).toString('base64'));
+console.log('decoded export', decoded);
+if (!(decoded.width > 0 && decoded.height > 0 && decoded.duration > 0 && decoded.duration < 3 && decoded.mean > 5 && decoded.variance > 10)) errors.push('Decoded export is black, flat, or has incorrect duration');
 
 // A saved look opens again.
 await page.click('#look-menu > .btn');

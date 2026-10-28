@@ -22,3 +22,7 @@ Where the web layer differs from GL, and why:
 - GPU timer queries read as zero; the page times whole frames itself.
 
 `web/test/run.mjs` paints `assets/sample.jpg` with every brush in headless Chromium on SwiftShader; against the same renderer on Linux OpenGL, stroke counts agree within about 1% and mean brightness and contrast within 0.3/255. `web/test/ui.mjs` walks through the app (under `xvfb-run` on Linux). CI (`.github/workflows/web.yml`) runs both and, from main, publishes `web/dist` to the `gh-pages` branch that GitHub Pages serves.
+
+`node --test web/test/video-export.mjs` covers encoder/MIME negotiation, aborts, seek timeouts and backpressure. `node web/test/regression.mjs` checks smoothing retention, legacy/current look compatibility, deterministic distinct experimental outputs and gate-off identity. UI checks include mobile/light/dark screenshots, capability failure, export cancellation, source locks and decoding a downloaded MP4 to a nonblack frame. CI uploads `web-test-output` and the built `paintify-web-preview`; pull requests do not publish to Pages.
+
+Experimental settings append one vec4 to the old style layout. Update the C++ struct, GLSL uniform, static_assert, bridge fields and old/new saved-look handling together. Experimental post effects never write the temporal paint-history canvas. See `system_architecture.md` for lifecycle and format contracts.

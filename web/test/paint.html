@@ -52,6 +52,11 @@ window.regressionTest = async imgUrl => {
   check(p.get('tensorOn') === 0 && p.get('p.tensorSigma') === 2.5, 'Smoothing look did not preserve switch and amount');
   p.loadLook(initial);
   const base = await pixels();
+  // Experiments must not activate dormant legacy finish settings.
+  p.set('s.finish', 1); p.set('s.rain', 1); p.set('s.contour', 1); p.set('s.licStrength', 1);
+  p.set('s.enabled', 0); p.set('s.experimentEnabled', 1); p.set('s.experimentStrength', 0);
+  check(distance(base, await pixels()) === 0, 'Experiment activated dormant finish effects');
+  p.loadLook(initial);
   const outputs = [];
   p.set('s.experimentEnabled', 1);
   for (const mode of [1, 2, 3]) {
