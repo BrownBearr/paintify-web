@@ -16,6 +16,9 @@ const server = http.createServer((req, res) => {
   if (u.endsWith('/')) u += 'index.html';
   fs.readFile(path.join(dist, u), (err, data) => {
     if (err) { res.writeHead(404); res.end(); return; }
+    // Instrument only this test server's response, never the production file.
+    // Await the actual serialized paint pump instead of guessing GPU timings.
+    if (u === '/app.js') data = Buffer.concat([data, Buffer.from('\nwindow.paintifyTestIdle = () => !pumping && !paintPending && !drawPending;\n')]);
     res.writeHead(200, { 'Content-Type': types[path.extname(u)] || 'application/octet-stream' });
     res.end(data);
   });
@@ -33,6 +36,7 @@ page.on('pageerror', e => errors.push(e.message));
 fs.mkdirSync(outDir, { recursive: true });
 const shot = async n => { await page.screenshot({ path: path.join(outDir, n + '.png') }); console.log('shot', n, '|', await page.textContent('#hud')); };
 const strokes = () => page.waitForFunction(() => /[1-9][\d,]* strokes/.test(document.getElementById('hud').textContent), null, { timeout: 120000 });
+const paintIdle = () => page.waitForFunction(() => window.paintifyTestIdle?.(), null, { timeout: 120000 });
 
 await page.goto(url);
 await page.waitForSelector('#loading', { state: 'hidden', timeout: 60000 });
@@ -69,12 +73,14 @@ await page.locator('.section > summary').filter({ hasText: /^Experimental$/ }).c
 const experiment = page.getByRole('switch', { name: 'Experimental effects', exact: true });
 if (await experiment.isChecked()) errors.push('Experimental UI defaults on');
 await experiment.check();
+await paintIdle();
 for (const mode of ['0', '1', '2']) {
   await page.getByLabel('Experimental algorithm', { exact: true }).selectOption(mode);
-  await page.waitForTimeout(500);
+  await paintIdle();
   await shot(`experimental-${mode}`);
 }
 await experiment.uncheck();
+await paintIdle();
 
 await page.setViewportSize({ width: 390, height: 844 });
 await shot('mobile-settings');

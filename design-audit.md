@@ -1,5 +1,7 @@
 # Paintify Web audit — 2026-10-28
 
+Completion: application source `edaeb5b` passed full CI run `40764358296` and final Terra review; desktop/mobile and all experimental modes were visually checked. See `task.md` and [draft PR #1](https://github.com/BrownBearr/paintify-web/pull/1) for implementation and final evidence. The audit below records the original findings.
+
 Read-only source audit by Sol with two user-requested Luna agents. No application code changed. Root browser audit successfully loaded deployed main and rendered the coffee sample at 1200×800 (19,763 strokes); narrow viewport around 406px wraps the toolbar into two rows and leaves a long scrollable settings area. Local future changes have not yet been built or visually tested.
 
 ## Confirmed and inferred findings
