@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paintify</title>
+<meta name="description" content="Turn photos, videos and your camera into paintings, live in the browser. Painted brushstrokes, designed for motion.">
+<meta name="theme-color" content="#F4F4F2">
+<link rel="icon" href="paintify.png">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><img src="paintify.png" alt=""><span>Paintify</span></div>
+  <div class="bar-group">
+    <button class="btn" id="open-btn" title="Open an image or video (O)">Open</button>
+    <button class="btn" id="camera-btn" title="Paint your camera live (C)">Camera</button>
+    <div class="menu" id="samples">
+      <button class="btn ghost" aria-haspopup="true">Samples</button>
+      <div class="menu-list" role="menu">
+        <button data-sample="media/coffee.jpg" role="menuitem">Espresso</button>
+        <button data-sample="media/rocket.jpg" role="menuitem">Rocket at night</button>
+        <button data-sample="media/landscape.jpg" role="menuitem">Landscape</button>
+        <button data-sample="media/cat.mp4" role="menuitem">Cat (video)</button>
+      </div>
+    </div>
+  </div>
+  <div class="segmented" id="view-mode" role="tablist" aria-label="View">
+    <button data-mode="0" class="on" title="The painting (1)">Painted</button>
+    <button data-mode="1" title="Original and painting with a wipe (2)">Split</button>
+    <button data-mode="2" title="The original (3)">Original</button>
+  </div>
+  <div class="bar-group right">
+    <div class="menu" id="look-menu">
+      <button class="btn ghost" aria-haspopup="true">Look</button>
+      <div class="menu-list" role="menu">
+        <button id="save-look" role="menuitem">Save look…</button>
+        <button id="open-look" role="menuitem">Open look…</button>
+        <button id="reset-look" role="menuitem">Reset all settings</button>
+      </div>
+    </div>
+    <button class="btn" id="record-btn" disabled title="Record the painted video">Record</button>
+    <button class="btn primary" id="save-btn" disabled title="Save the painting as a PNG (⌘S)">Save image</button>
+  </div>
+</header>
+
+<main>
+  <section class="stage" id="stage">
+    <canvas id="view"></canvas>
+    <div class="wipe" id="wipe" hidden><span></span></div>
+    <div class="empty" id="empty">
+      <div class="empty-card">
+        <h1>Painted brushstrokes, designed for motion.</h1>
+        <p>Drop an image or a video here, or paint your camera live. Everything runs on your graphics card; nothing is uploaded.</p>
+        <div class="empty-actions">
+          <button class="btn primary" id="empty-open">Open image or video</button>
+          <button class="btn" id="empty-camera">Use camera</button>
+        </div>
+        <div class="empty-samples">
+          <span>Or try</span>
+          <button class="link" data-sample="media/coffee.jpg">an espresso</button>
+          <button class="link" data-sample="media/rocket.jpg">a rocket</button>
+          <button class="link" data-sample="media/cat.mp4">a video</button>
+        </div>
+      </div>
+    </div>
+    <div class="drop" id="drop" hidden><div>Drop to paint</div></div>
+    <div class="transport" id="transport" hidden>
+      <button class="icon-btn" id="play-btn" title="Play or pause (Space)" aria-label="Play or pause"></button>
+      <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Position">
+      <span class="time mono" id="time">0:00</span>
+    </div>
+    <div class="hud mono" id="hud"></div>
+    <div class="notice" id="notice" hidden></div>
+    <div class="loading" id="loading"><div class="spinner"></div><span>Starting the painter…</span></div>
+  </section>
+  <aside class="panel" id="panel" aria-label="Settings"></aside>
+</main>
+
+<div class="unsupported" id="unsupported" hidden>
+  <div class="empty-card">
+    <h1>This browser can't run Paintify yet.</h1>
+    <p id="unsupported-why"></p>
+    <p>Paintify paints on your graphics card through WebGPU. Use a current version of Chrome, Edge or Arc on Mac, Windows or ChromeOS, or Safari 26.</p>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept="image/*,video/*,.sbr" hidden>
+<input type="file" id="look-input" accept=".sbr,text/plain" hidden>
+<video id="video" playsinline muted loop hidden></video>
+</body>
+</html>
