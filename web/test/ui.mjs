@@ -18,16 +18,17 @@ const server = http.createServer((req, res) => {
     if (err) { res.writeHead(404); res.end(); return; }
     // Instrument only this test server's response, never the production file.
     // Await the actual serialized paint pump instead of guessing GPU timings.
-    if (u === '/app.js') data = Buffer.concat([data, Buffer.from('\nwindow.paintifyTestIdle = () => !pumping && !paintPending && !drawPending;\n')]);
+    if (u === '/app.js') data = Buffer.concat([data, Buffer.from('\nwindow.paintifyTestIdle = () => !pumping && !paintPending && !drawPending;\nwindow.paintifyTestRecording = () => ({ state: recorder?.state, chunks: recordingSession?.chunks.length || 0 });\n')]);
     res.writeHead(200, { 'Content-Type': types[path.extname(u)] || 'application/octet-stream' });
     res.end(data);
   });
 }).listen(0);
 const url = `http://localhost:${server.address().port}/`;
 // Headful under xvfb-run: headless Chromium does not present WebGPU canvases.
-const browser = await chromium.launch({ headless: false, args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan',
+const browserOptions = { headless: false, args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan',
   '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader',
-  '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
+  '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] };
+const browser = await chromium.launch(browserOptions);
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['camera'], acceptDownloads: true });
 const page = await ctx.newPage();
 const errors = [];
@@ -161,16 +162,38 @@ await page.waitForSelector('#notice:not([hidden])');
 const lookNote = await page.textContent('#notice');
 console.log('look:', look.suggestedFilename(), '->', lookNote);
 if (!/Opened look/.test(lookNote)) errors.push('look did not reopen: ' + lookNote);
-await page.click('#camera-btn');
-await page.waitForFunction(() => document.title.startsWith('Camera'), null, { timeout: 60000 });
-await page.waitForTimeout(20000);
-await shot('6-camera');
+// Camera recording gets a fresh browser/GPU device and default look, rather
+// than inheriting the long image/video stress session on software WebGPU.
+// Device loss remains an explicit failure; this is isolation, not a retry.
+await browser.close();
+const cameraBrowser = await chromium.launch(browserOptions);
+const cameraContext = await cameraBrowser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['camera'], acceptDownloads: true });
+const cameraPage = await cameraContext.newPage();
+cameraPage.on('console', m => { if (m.type() === 'error' || /WebGPU\]/.test(m.text())) errors.push(m.text()); });
+cameraPage.on('pageerror', e => errors.push(e.message));
+await cameraPage.goto(url);
+await cameraPage.waitForSelector('#loading', { state: 'hidden', timeout: 60000 });
+await cameraPage.click('#camera-btn');
+await cameraPage.waitForFunction(() => {
+  const note = document.getElementById('notice').textContent;
+  if (note.includes('graphics card was reset')) throw new Error(note);
+  return /fps/.test(document.getElementById('hud').textContent);
+}, null, { timeout: 120000 });
+await cameraPage.screenshot({ path: path.join(outDir, '6-camera.png') });
+console.log('shot 6-camera |', await cameraPage.textContent('#hud'));
 
-// The camera records live until Stop.
-const rec = page.waitForEvent('download', { timeout: 120000 });
-await page.click('#record-btn');
-await page.waitForTimeout(15000);
-await page.click('#record-btn');
+// Wait for actual recorder output before starting the recording window.
+await cameraPage.click('#record-btn');
+await cameraPage.waitForFunction(() => {
+  const note = document.getElementById('notice').textContent;
+  if (note.includes('graphics card was reset') || note.includes('Recording failed')) throw new Error(note);
+  const recording = window.paintifyTestRecording();
+  return document.getElementById('record-btn').textContent === 'Stop' && recording.state === 'recording' && recording.chunks > 0;
+}, null, { timeout: 120000 });
+console.log('recorder ready', await cameraPage.evaluate(() => window.paintifyTestRecording()));
+await cameraPage.waitForTimeout(15000);
+const rec = cameraPage.waitForEvent('download', { timeout: 120000 });
+await cameraPage.click('#record-btn');
 const recDl = await rec;
 const recPath = path.join(outDir, recDl.suggestedFilename());
 await recDl.saveAs(recPath);
@@ -178,6 +201,6 @@ console.log('recorded', recDl.suggestedFilename(), fs.statSync(recPath).size, 'b
 if (fs.statSync(recPath).size < 1000) errors.push('camera recording is empty');
 console.log(errors.length ? 'ERRORS:\n' + errors.slice(0, 20).join('\n') : 'no console errors');
 const failed = errors.length > 0;
-await browser.close();
+await cameraBrowser.close();
 server.close();
 if (failed) process.exit(1);
