@@ -32,7 +32,7 @@ const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enab
 const page = await browser.newPage();
 page.on('console', m => console.log('[page]', m.text()));
 page.on('pageerror', e => console.log('[page error]', e.message));
-await page.goto(`http://localhost:${port}/test/paint.html`);
+await page.goto(`http://localhost:${port}/test/paint.html${process.env.PAINTIFY_BASIC ? "?basic" : ""}`);
 await page.waitForFunction(() => window.ready);
 const res = await page.evaluate(([img, st, se]) => window.paintTest(img, st, se),
                                 [`/img/${path.resolve(image)}`, styles.length ? styles : ['none'], settings]);

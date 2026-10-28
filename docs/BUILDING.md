@@ -11,7 +11,7 @@ Build it with emsdk, glslang, SPIRV-Cross and naga on PATH:
     web/build.sh                     # writes web/dist
     python3 -m http.server -d web/dist 8000
 
-Then open http://localhost:8000 in Chrome, Edge or Safari 26. A WebGPU adapter with the `float32-blendable` feature is required (every desktop GPU has it).
+Then open http://localhost:8000 in Chrome, Edge or Safari 26. Any WebGPU adapter works. The optional `float32-blendable` and `float32-filterable` features are used when present; without them (some browsers hide them, Brave among them) paint height is blended in half floats and 32-bit textures are sampled through half-float copies. `?basic` turns them off to test that path.
 
 Where the web layer differs from GL, and why:
 

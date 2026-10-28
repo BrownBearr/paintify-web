@@ -44,6 +44,7 @@ addToLibrary({
       GLW.queue = device.queue;
       GLW.shaders = shaders;
       GLW.filterable32 = device.features.has('float32-filterable');
+      GLW.blendable32 = device.features.has('float32-blendable');
       GLW.arena = device.createBuffer({ size: GLW.ARENA, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       GLW.arenaCpu = new Uint8Array(GLW.ARENA);
       const B = GPUBufferUsage;
@@ -66,8 +67,8 @@ addToLibrary({
       }
       throw new Error('gl_webgpu: unsupported internal format 0x' + glInternal.toString(16));
     },
-    bpp(f) { return { rgba8unorm: 4, rgba16float: 8, rgba32float: 16, rg32float: 8, r32float: 4, r32uint: 4 }[f]; },
-    channels(f) { return { rgba8unorm: 4, rgba16float: 4, rgba32float: 4, rg32float: 2, r32float: 1, r32uint: 1 }[f]; },
+    bpp(f) { return { rgba8unorm: 4, rgba16float: 8, r16float: 2, rgba32float: 16, rg32float: 8, r32float: 4, r32uint: 4 }[f]; },
+    channels(f) { return { rgba8unorm: 4, rgba16float: 4, r16float: 1, rgba32float: 4, rg32float: 2, r32float: 1, r32uint: 1 }[f]; },
     glChannels(format) {
       switch (format) { case 0x1903: case 0x8D94: return 1; case 0x8227: return 2; case 0x1907: return 3; default: return 4; }
     },
@@ -126,6 +127,7 @@ addToLibrary({
         for (let i = 0; i < n; i++) for (let c = 0; c < 4; c++) o[i * 4 + c] = GLW.toHalf(get(i, c));
         return new Uint8Array(o.buffer);
       }
+      if (f === 'r16float') { const o = new Uint16Array(n); for (let i = 0; i < n; i++) o[i] = GLW.toHalf(get(i, 0)); return new Uint8Array(o.buffer); }
       if (f === 'r32uint') { const o = new Uint32Array(n); for (let i = 0; i < n; i++) o[i] = src[i * srcCh]; return new Uint8Array(o.buffer); }
       const o = new Float32Array(n * dstCh);
       for (let i = 0; i < n; i++) for (let c = 0; c < dstCh; c++) o[i * dstCh + c] = get(i, c);
@@ -180,7 +182,7 @@ addToLibrary({
     makeTexture(t) {
       const f = t.format, U = GPUTextureUsage;
       let usage = U.TEXTURE_BINDING | U.COPY_SRC | U.COPY_DST | U.RENDER_ATTACHMENT;
-      if (f !== 'rgba8unorm' || true) usage |= U.STORAGE_BINDING;
+      if (f !== 'r16float') usage |= U.STORAGE_BINDING;
       t.tex = GLW.device.createTexture({
         size: [t.w, t.h, t.depth], format: f, mipLevelCount: t.levels, usage,
         dimension: '2d',
@@ -197,7 +199,7 @@ addToLibrary({
       return (t.views[key] = t.tex.createView(d));
     },
     sampler(t, forceNearest) {
-      const mf = t.minF, nearest = forceNearest || !GLW.filterable32 && GLW.is32f(t.format);
+      const mf = t.minF, nearest = forceNearest;
       const lin = v => (!nearest && (v === 0x2601 || v === 0x2701 || v === 0x2703)) ? 'linear' : 'nearest';
       const mip = (mf === 0x2702 || mf === 0x2703) && !nearest ? 'linear' : 'nearest';
       const useMips = mf >= 0x2700 && mf <= 0x2703;
@@ -239,6 +241,55 @@ addToLibrary({
       return c;
     },
 
+    // Without float32-filterable a 32-bit float texture cannot be sampled
+    // through a filtering sampler, so it is read through a half-float copy
+    // (every mip level) instead: the precision the desktop build stores
+    // those textures at anyway.
+    halfCopy(t) {
+      const fmt = { r32float: 'r16float', rg32float: 'rg16float', rgba32float: 'rgba16float' }[t.format];
+      let c = t.__half;
+      if (!c) {
+        c = { w: t.w, h: t.h, depth: 1, levels: t.levels, format: fmt, array: false,
+              minF: t.minF, magF: t.magF, wrapS: t.wrapS, wrapT: t.wrapT };
+        const U = GPUTextureUsage;
+        c.tex = GLW.device.createTexture({ size: [t.w, t.h], format: fmt, mipLevelCount: t.levels,
+          usage: U.TEXTURE_BINDING | U.RENDER_ATTACHMENT });
+        c.views = {};
+        t.__half = c;
+      }
+      Object.assign(c, { minF: t.minF, magF: t.magF, wrapS: t.wrapS, wrapT: t.wrapT });
+      GLW.half = GLW.half || {};
+      if (!GLW.half[fmt]) {
+        const code = `
+          @group(0) @binding(0) var src: texture_2d<f32>;
+          @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+            let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+            return vec4f(p * 2.0 - 1.0, 0.0, 1.0);
+          }
+          @fragment fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+            return textureLoad(src, vec2i(pos.xy), 0);
+          }`;
+        const m = GLW.device.createShaderModule({ code });
+        const bgl = GLW.device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'unfilterable-float' } }] });
+        GLW.half[fmt] = { bgl, pipe: GLW.device.createRenderPipeline({
+          layout: GLW.device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+          vertex: { module: m, entryPoint: 'vs' }, fragment: { module: m, entryPoint: 'fs', targets: [{ format: fmt }] },
+          primitive: { topology: 'triangle-list' } }) };
+      }
+      const H = GLW.half[fmt];
+      GLW.endPass();
+      const enc = GLW.encoder();
+      for (let l = 0; l < t.levels; l++) {
+        const pass = enc.beginRenderPass({ colorAttachments: [{ view: GLW.view(c, 'attach', l), loadOp: 'clear', storeOp: 'store' }] });
+        pass.setPipeline(H.pipe);
+        pass.setBindGroup(0, GLW.device.createBindGroup({ layout: H.bgl, entries: [{ binding: 0, resource: GLW.view(t, 'sampleLevel', l) }] }));
+        pass.draw(3);
+        pass.end();
+      }
+      return c;
+    },
+
     // --- programs -------------------------------------------------------------
     link(p) {
       const stages = p.shaders.map(s => GLW.shaderObjs.get(s)).map(s => ({ type: s.type, info: GLW.shaders[s.key], key: s.key }));
@@ -266,8 +317,8 @@ addToLibrary({
         if (b.type === 'uniform') e.buffer = { type: 'uniform' };
         else if (b.type === 'storage') e.buffer = { type: 'storage' };
         else if (b.type === 'read-only-storage') e.buffer = { type: 'read-only-storage' };
-        else if (b.type === 'sampler') e.sampler = { type: GLW.filterable32 ? 'filtering' : 'non-filtering' };
-        else if (b.type === 'texture') e.texture = { sampleType: b.sample === 'uint' ? 'uint' : (GLW.filterable32 ? 'float' : 'unfilterable-float'), viewDimension: b.dim };
+        else if (b.type === 'sampler') e.sampler = { type: 'filtering' };
+        else if (b.type === 'texture') e.texture = { sampleType: b.sample === 'uint' ? 'uint' : 'float', viewDimension: b.dim };
         else if (b.type === 'storageTexture') e.storageTexture = { access: b.access, format: b.format, viewDimension: '2d' };
         return e;
       });
@@ -352,6 +403,7 @@ addToLibrary({
           const wantArray = b.dim === '2d-array';
           if (!t || !!t.array !== wantArray) t = GLW.dummyTexture(wantArray ? 'array' : '2d', 'rgba16float');
           else if (writes.has(name)) t = GLW.snapshot(t, 0);
+          if (!GLW.filterable32 && GLW.is32f(t.format)) t = GLW.halfCopy(t);
           res = GLW.view(t, 'sample', 0);
         } else if (b.type === 'sampler' && n >= S.readSampler) {
           res = GLW.sampler(GLW.dummyTexture('2d', 'rgba16float'), true);
@@ -455,13 +507,17 @@ addToLibrary({
   glTextureStorage2D__deps: ['$GLW'],
   glTextureStorage2D: (name, levels, ifmt, w, h) => {
     const t = GLW.textures.get(name);
-    Object.assign(t, { w, h, depth: 1, levels, format: GLW.fmt(ifmt), array: false });
+    Object.assign(t, { w, h, depth: 1, levels, format: GLW.fmt(ifmt), glFormat: ifmt, array: false });
     GLW.makeTexture(t);
   },
   glTextureStorage3D__deps: ['$GLW'],
   glTextureStorage3D: (name, levels, ifmt, w, h, d) => {
     const t = GLW.textures.get(name);
-    Object.assign(t, { w, h, depth: d, levels, format: GLW.fmt(ifmt), array: true });
+    // Arrays (the brush tiles) are only ever sampled, so without
+    // float32-filterable R16F stays a real half float.
+    let format = GLW.fmt(ifmt);
+    if (!GLW.filterable32 && ifmt === 0x822D) format = 'r16float';
+    Object.assign(t, { w, h, depth: d, levels, format, array: true });
     GLW.makeTexture(t);
   },
   glTextureSubImage3D__deps: ['$GLW'],
@@ -583,7 +639,7 @@ addToLibrary({
     await rb.mapAsync(GPUMapMode.READ);
     const raw = new Uint8Array(rb.getMappedRange());
     const srcCh = GLW.channels(t.format), outCh = GLW.glChannels(format);
-    const half = t.format === 'rgba16float', u8 = t.format === 'rgba8unorm';
+    const half = t.format === 'rgba16float' || t.format === 'r16float', u8 = t.format === 'rgba8unorm';
     const f32 = new Float32Array(raw.buffer), u16 = new Uint16Array(raw.buffer);
     const out = type === 0x1401 ? HEAPU8 : HEAPF32;
     const base = type === 0x1401 ? pixels : pixels >> 2;
@@ -593,7 +649,7 @@ addToLibrary({
           let v;
           if (c >= srcCh) v = c === 3 ? 1 : 0;
           else if (u8) v = raw[y * aligned + x * 4 + c] / 255;
-          else if (half) v = GLW.fromHalf(u16[(y * aligned + x * 8) / 2 + c]);
+          else if (half) v = GLW.fromHalf(u16[(y * aligned + x * bpp) / 2 + c]);
           else v = f32[(y * aligned + x * bpp) / 4 + c];
           const i = base + (y * w + x) * outCh + c;
           out[i] = type === 0x1401 ? Math.max(0, Math.min(255, Math.round(v * 255))) : v;
@@ -684,6 +740,17 @@ addToLibrary({
   },
   glNamedFramebufferTexture__deps: ['$GLW'],
   glNamedFramebufferTexture: (fbo, attachment, tex, level) => {
+    // Strokes blend into every attachment, and blending 32-bit float is an
+    // optional feature. Without it an R16F attachment (paint height) goes
+    // back to real half floats: it is never a storage image, so nothing
+    // else needs it 32-bit. Attachments are made right after the texture,
+    // before anything is drawn into it.
+    const t = tex && GLW.textures.get(tex);
+    if (t && !GLW.blendable32 && t.glFormat === 0x822D && t.format === 'r32float') {
+      t.tex.destroy();
+      t.format = 'r16float';
+      GLW.makeTexture(t);
+    }
     GLW.fbos.get(fbo).att[attachment - 0x8CE0] = tex ? { tex, level } : null;
   },
   glNamedFramebufferDrawBuffers__deps: ['$GLW'],

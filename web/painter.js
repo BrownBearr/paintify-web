@@ -8,11 +8,11 @@ export async function startPainter({ base = '.' } = {}) {
   if (!navigator.gpu) throw new Unsupported('This browser has no WebGPU.');
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Unsupported('No WebGPU graphics adapter is available.');
-  // The canvas stores paint height as 32-bit float and blends strokes into
-  // it; sampling those textures filtered is wanted but optional.
-  if (!adapter.features.has('float32-blendable'))
-    throw new Unsupported('This graphics adapter cannot blend 32-bit float paint (float32-blendable).');
-  const features = ['float32-blendable', 'float32-filterable'].filter(f => adapter.features.has(f));
+  // Both are optional: without them the painter blends paint height in half
+  // floats and samples its 32-bit textures unfiltered (web/gl_webgpu.js).
+  // ?basic leaves them off, to test that path.
+  const basic = new URLSearchParams(location.search).has('basic');
+  const features = basic ? [] : ['float32-blendable', 'float32-filterable'].filter(f => adapter.features.has(f));
   const L = adapter.limits;
   const device = await adapter.requestDevice({
     requiredFeatures: features,
