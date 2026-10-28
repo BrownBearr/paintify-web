@@ -3,6 +3,7 @@
 import { startPainter, Unsupported } from './painter.js';
 import { Display } from './display.js';
 import { Muxer, ArrayBufferTarget } from './vendor/mp4-muxer.js';
+import { negotiateVideoEncoderConfig, seekVideo, waitForEncoderQueue, chooseRecordingMimeType } from './video-export.js';
 
 const $ = id => document.getElementById(id);
 const el = (tag, props = {}, ...kids) => {
@@ -33,8 +34,15 @@ let defaults = {};
 let initialLook = '';
 let paintPending = false, drawPending = false, framePending = false, pumping = false;
 let lastPaintMs = 0, fps = 0, frameTimes = [];
-let recorder = null, recChunks = [], recStart = 0;
+let recorder = null, recStart = 0;
 let exporting = null;   // {done, total, cancel} while a video export runs
+let recordingSession = null;
+
+function busy() {
+  if (!exporting) return false;
+  notice('Cancel the video export before changing the source or settings.');
+  return true;
+}
 
 // ── start ──────────────────────────────────────────────────────────────────
 async function main() {
@@ -80,6 +88,7 @@ function kick() { if (!pumping) pump(); }
 const nextFrame = () => new Promise(r => requestAnimationFrame(r));
 
 async function pump() {
+  if (exporting) return;
   pumping = true;
   try {
     while (paintPending || drawPending || framePending) {
@@ -146,7 +155,7 @@ function updateHud() {
 
 // ── sources ────────────────────────────────────────────────────────────────
 function stopLive() {
-  if (exporting) exporting.cancel = true;
+  if (exporting) { exporting.cancel = true; exporting.controller.abort(); }
   video.pause();
   if (video.__rvfc) { video.cancelVideoFrameCallback?.(video.__rvfc); video.__rvfc = 0; }
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
@@ -160,7 +169,7 @@ function sourceReady(kind, name, w, h) {
   $('save-btn').disabled = false;
   $('record-btn').disabled = kind === 'image';
   $('record-btn').textContent = kind === 'video' ? 'Export video' : 'Record';
-  $('record-btn').title = kind === 'video' ? 'Paint every frame and save an MP4' : 'Record the painted camera';
+  $('record-btn').title = kind === 'video' ? 'Export a silent painted MP4 at an estimated frame rate' : 'Record the painted camera (MP4 or WebM)';
   $('transport').hidden = kind !== 'video';
   src.fps = 0; src.frameDeltas = [];
   view.zoom = 1; view.focusX = view.focusY = -1;
@@ -171,6 +180,7 @@ function sourceReady(kind, name, w, h) {
 }
 
 async function openImage(blob, name) {
+  if (busy()) return;
   stopRecording();
   stopLive();
   let bmp = await createImageBitmap(blob);
@@ -222,6 +232,7 @@ async function startVideo(url, name) {
   const [w, h] = liveSize(video.videoWidth, video.videoHeight);
   scaler.width = w; scaler.height = h;
   sourceReady('video', name, w, h);
+  updateExportCapability();
   watchFrames();
   framePending = true; kick();
   try { await video.play(); } catch { /* autoplay blocked: the play button works */ }
@@ -229,6 +240,7 @@ async function startVideo(url, name) {
 }
 
 async function openVideo(blob, name) {
+  if (busy()) return;
   stopRecording();
   stopLive();
   try { await startVideo(URL.createObjectURL(blob), name); }
@@ -236,6 +248,7 @@ async function openVideo(blob, name) {
 }
 
 async function openCamera() {
+  if (busy()) return;
   stopRecording();
   stopLive();
   try {
@@ -256,6 +269,7 @@ async function openCamera() {
 }
 
 async function openFile(file) {
+  if (busy()) return;
   if (!file) return;
   const name = file.name.replace(/\.[^.]+$/, '');
   if (/\.sbr$/i.test(file.name)) return loadLookText(await file.text(), file.name);
@@ -265,6 +279,7 @@ async function openFile(file) {
 }
 
 async function openSample(url) {
+  if (busy()) return;
   // The sample video ships as H.264 and VP9; not every browser plays both.
   if (/\.mp4$/.test(url) && !document.createElement('video').canPlayType('video/mp4; codecs="avc1.42E01E"'))
     url = url.replace(/\.mp4$/, '.webm');
@@ -286,6 +301,7 @@ function updateTransport() {
 }
 let scrubbing = false;
 function togglePlay() {
+  if (exporting) return;
   if (src.kind !== 'video') return;
   if (video.paused) { painter.resetTemporal(); video.play(); } else video.pause();
   setTimeout(updateTransport, 0);
@@ -308,9 +324,7 @@ async function saveImage() {
 }
 
 function recordingType() {
-  for (const t of ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'])
-    if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
-  return '';
+  return chooseRecordingMimeType();
 }
 
 // The camera is recorded live, as it paints.
@@ -321,115 +335,157 @@ function startRecording() {
   // An invisible canvas at the painting's size feeds the recorder.
   const c = el('canvas', { style: 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none', 'aria-hidden': 'true' });
   c.width = src.w; c.height = src.h;
-  document.body.append(c);
-  recDisplay = new Display(painter.device, c);
-  recDisplay.fixedSize = true;
-  const s = c.captureStream(30);
-  recChunks = [];
-  recorder = new MediaRecorder(s, { mimeType: type, videoBitsPerSecond: 12e6 });
-  recorder.ondataavailable = e => e.data.size && recChunks.push(e.data);
-  recorder.onstop = () => {
-    const ext = type.startsWith('video/mp4') ? 'mp4' : 'webm';
-    download(new Blob(recChunks, { type }), `${src.name}-painted.${ext}`);
+  const session = { name: src.name, chunks: [], canvas: c, stream: null, display: null };
+  const cleanup = () => {
+    session.stream?.getTracks().forEach(t => t.stop());
+    session.display?.destroy?.();
     c.remove();
-    recDisplay = null;
+    if (recDisplay === session.display) recDisplay = null;
+    if (recordingSession === session) { recordingSession = null; recorder = null; }
   };
-  recorder.start(250);
-  recStart = performance.now();
-  $('record-btn').textContent = 'Stop';
-  $('record-btn').classList.add('recording');
+  try {
+    document.body.append(c);
+    session.display = new Display(painter.device, c);
+    session.display.fixedSize = true;
+    recDisplay = session.display;
+    session.stream = c.captureStream(30);
+    const r = new MediaRecorder(session.stream, { mimeType: type.mimeType, videoBitsPerSecond: 12e6 });
+    session.recorder = r;
+    recorder = r;
+    recordingSession = session;
+    r.ondataavailable = e => { if (e.data.size) session.chunks.push(e.data); };
+    r.onerror = e => { session.failed = true; notice(`Recording failed: ${e.error?.message || 'encoder error'}`, true); stopRecording(); };
+    r.onstop = () => {
+      const mime = r.mimeType || type.mimeType;
+      if (!session.failed && session.chunks.length) download(new Blob(session.chunks, { type: mime }), `${session.name}-painted.${mime.startsWith('video/mp4') ? 'mp4' : 'webm'}`);
+      cleanup();
+    };
+    r.start(250);
+    recStart = performance.now();
+    $('record-btn').textContent = 'Stop';
+    $('record-btn').classList.add('recording');
+    notice(`Recording silent ${type.extension.toUpperCase()} video. Press Stop to save.`, false, 5000);
+  } catch (e) {
+    cleanup();
+    notice(`Recording failed: ${e.message}`, true);
+  }
 }
 
 function stopRecording() {
   if (!recorder) return;
   const r = recorder;
   recorder = null;
-  r.stop();
+  if (r.state !== 'inactive') r.stop();
   $('record-btn').textContent = 'Record';
   $('record-btn').classList.remove('recording');
   updateHud();
 }
 
-// A video file is exported frame by frame, not in real time: each frame is
-// seeked to, painted and encoded with WebCodecs, so the result has every
-// frame at the source's rate however long the painting takes.
-const EXPORT_CODECS = [
-  { codec: 'avc1.640028', mux: 'avc' },     // H.264 High: plays everywhere
-  { codec: 'vp09.00.40.08', mux: 'vp9' },
-  { codec: 'av01.0.08M.08', mux: 'av1' },
-];
-
+// A video file is sampled at an estimated constant frame rate, painted and
+// encoded offline. This does not preserve exact source timestamps or audio.
 async function exportVideo() {
-  if (exporting) { exporting.cancel = true; return; }
+  if (exporting) { exporting.cancel = true; exporting.controller.abort(); return; }
+  if (src.kind !== 'video') return;
   if (!window.VideoEncoder) { notice('This browser cannot encode video (WebCodecs). Try Chrome, Edge or Safari.', true); return; }
   const w = src.w, h = src.h;
   const d = [...src.frameDeltas].sort((a, b) => a - b);
   const fps = d.length >= 5 ? Math.min(60, Math.max(10, Math.round(1 / d[d.length >> 1]))) : 30;
   const bitrate = Math.round(w * h * fps * 0.25);
-  let pick = null;
-  for (const c of EXPORT_CODECS) {
-    const cfg = { codec: c.codec, width: w, height: h, bitrate, framerate: fps };
-    try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) { pick = { ...c, cfg }; break; } } catch { /* next */ }
-  }
-  if (!pick) { notice('No video encoder is available in this browser.', true); return; }
-
   const wasPlaying = !video.paused;
+  const originalTime = video.currentTime;
+  const name = src.name;
   video.pause();
   // window.paintifyExportLimit caps the frame count (the UI test sets it).
   const total = Math.max(1, Math.min(window.paintifyExportLimit || Infinity, Math.floor(video.duration * fps)));
-  exporting = { done: 0, total, cancel: false };
+  const session = { done: 0, total, cancel: false, controller: new AbortController() };
+  exporting = session;
+  const { signal } = session.controller;
   const btn = $('record-btn');
   btn.textContent = 'Cancel export';
   btn.classList.add('recording');
-  const c = el('canvas', { style: 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none', 'aria-hidden': 'true' });
-  c.width = w; c.height = h;
-  document.body.append(c);
-  recDisplay = new Display(painter.device, c);
-  recDisplay.fixedSize = true;
-
-  const target = new ArrayBufferTarget();
-  const muxer = new Muxer({ target, fastStart: 'in-memory', video: { codec: pick.mux, width: w, height: h, frameRate: fps } });
+  const locked = [...document.querySelectorAll('#panel input, #panel select, #panel button, #panel summary, .bar button, #scrub, #play-btn')]
+    .filter(e => e !== btn).map(e => [e, e.disabled]);
+  for (const [e] of locked) { if ('disabled' in e) e.disabled = true; else e.setAttribute('inert', ''); }
+  $('panel').setAttribute('inert', '');
+  $('export-progress').hidden = false;
+  $('export-progress').max = total;
+  $('export-progress').value = 0;
+  let c = null, encoder = null, exportDisplay = null;
   let failure = null;
-  const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { failure = e; } });
-  encoder.configure(pick.cfg);
   const steady = painter.get('p.frameDiffThreshold') > 0;
-  painter.resetTemporal();
   try {
-    for (let i = 0; i < total && !exporting.cancel && !failure; i++) {
-      await new Promise(res => { video.addEventListener('seeked', res, { once: true }); video.currentTime = Math.min(video.duration, (i + 0.5) / fps); });
+    // Let the active paint operation finish before taking exclusive GPU ownership.
+    while (pumping) { if (signal.aborted) throw new DOMException('Export cancelled', 'AbortError'); await nextFrame(); }
+    paintPending = drawPending = framePending = false;
+    const pick = await negotiateVideoEncoderConfig({ width: w, height: h, bitrate, framerate: fps });
+    if (!pick) throw new Error('No supported MP4 video encoder is available at this processing size. Try a smaller Processing size or another browser.');
+    if (signal.aborted) throw new DOMException('Export cancelled', 'AbortError');
+    c = el('canvas', { style: 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none', 'aria-hidden': 'true' });
+    c.width = w; c.height = h;
+    document.body.append(c);
+    exportDisplay = new Display(painter.device, c);
+    exportDisplay.fixedSize = true;
+    recDisplay = exportDisplay;
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({ target, fastStart: 'in-memory', video: { codec: pick.mux, width: w, height: h, frameRate: fps } });
+    encoder = new VideoEncoder({ output: (chunk, meta) => { try { muxer.addVideoChunk(chunk, meta); } catch (e) { failure = e; } }, error: e => { failure = e; } });
+    encoder.configure(pick.config);
+    painter.resetTemporal();
+    for (let i = 0; i < total; i++) {
+      if (signal.aborted) throw new DOMException('Export cancelled', 'AbortError');
+      if (failure) throw failure;
+      await seekVideo(video, Math.min(video.duration, (i + 0.5) / fps), signal);
       scaler.getContext('2d').drawImage(video, 0, 0, w, h);
       await painter.setSource(scaler, w, h);
       display.setSource(scaler, w, h);
       await painter.render(steady);
       draw();
       const frame = new VideoFrame(c, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
-      encoder.encode(frame, { keyFrame: i % (fps * 2) === 0 });
-      frame.close();
-      while (encoder.encodeQueueSize > 4) await new Promise(r => setTimeout(r, 5));
-      exporting.done = i + 1;
+      try { encoder.encode(frame, { keyFrame: i % (fps * 2) === 0 }); } finally { frame.close(); }
+      await waitForEncoderQueue(encoder, { signal, getError: () => failure });
+      session.done = i + 1;
+      $('export-progress').value = session.done;
       updateHud();
     }
     if (failure) throw failure;
-    if (!exporting.cancel) {
-      await encoder.flush();
+    if (!session.cancel) {
+      await boundedExportFlush(encoder, signal);
+      if (failure) throw failure;
       muxer.finalize();
-      download(new Blob([target.buffer], { type: 'video/mp4' }), `${src.name}-painted.mp4`);
-      notice(`Exported ${total} frames at ${fps} fps.`);
+      download(new Blob([target.buffer], { type: 'video/mp4' }), `${name}-painted.mp4`);
+      notice(`Exported ${total} painted frames at an estimated ${fps} fps (silent MP4).`);
     } else notice('Export cancelled.');
   } catch (e) {
-    console.error(e);
-    notice(`Export failed: ${e.message}`, true);
+    if (e.name === 'AbortError') notice('Export cancelled.');
+    else { console.error(e); notice(`Export failed: ${e.message}`, true); }
   } finally {
-    try { encoder.close(); } catch { /* closed */ }
-    c.remove();
-    recDisplay = null;
+    try { encoder?.close(); } catch { /* closed */ }
+    exportDisplay?.destroy?.();
+    c?.remove();
+    if (recDisplay === exportDisplay) recDisplay = null;
     exporting = null;
     btn.textContent = 'Export video';
     btn.classList.remove('recording');
+    $('panel').removeAttribute('inert');
+    for (const [e, disabled] of locked) { if ('disabled' in e) e.disabled = disabled; else e.removeAttribute('inert'); }
+    $('export-progress').hidden = true;
     painter.resetTemporal();
-    if (src.kind === 'video') { video.currentTime = 0; if (wasPlaying) video.play(); }
+    if (src.kind === 'video') { video.currentTime = originalTime; if (wasPlaying) video.play().catch(() => {}); }
+    refreshAll();
+    requestPaint();
     updateHud();
   }
+}
+
+function boundedExportFlush(encoder, signal) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
+    const abort = () => { cleanup(); reject(new DOMException('Export cancelled', 'AbortError')); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error('The video encoder timed out while finishing.')); }, 30000);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) { abort(); return; }
+    encoder.flush().then(() => { cleanup(); resolve(); }, e => { cleanup(); reject(e); });
+  });
 }
 
 // ── looks ──────────────────────────────────────────────────────────────────
@@ -439,11 +495,25 @@ function saveLook() {
   download(new Blob([text], { type: 'text/plain' }), `${brush.key === 'none' ? 'look' : brush.key}.sbr`);
 }
 function loadLookText(text, name) {
+  if (busy()) return;
   const err = painter.loadLook(text);
   if (err) { notice(`${name}: ${err}`, true); return; }
-  notice(`Opened look ${name}`);
+  notice(`Opened look ${name}${painter.get('s.experimentEnabled') > 0.5 ? ' · Experimental effects enabled' : ''}`);
   buildPanel();
   requestPaint();
+}
+
+let capabilityRevision = 0;
+async function updateExportCapability() {
+  const revision = ++capabilityRevision;
+  if (src.kind !== 'video' || exporting) return;
+  const pick = await negotiateVideoEncoderConfig({ width: src.w, height: src.h, bitrate: Math.round(src.w * src.h * 30 * 0.25), framerate: 30 });
+  if (revision !== capabilityRevision || src.kind !== 'video' || exporting) return;
+  const message = pick ? 'Silent MP4 export available. Frame rate is estimated; large videos need more memory.'
+    : 'MP4 export is unavailable at this processing size. Try a smaller size or a browser with a video encoder.';
+  $('record-btn').title = message;
+  const status = $('export-capability');
+  if (status) status.textContent = message;
 }
 
 // ── settings panel ───────────────────────────────────────────────────────────
@@ -459,13 +529,16 @@ const reg = k => { if (!ALL_KEYS.includes(k)) ALL_KEYS.push(k); return k; };
   's.fieldMix', 's.perturb', 's.vortexSpiral', 's.vortexRadius', 's.saturation', 's.warmCool', 's.labJitterL',
   's.labJitterAB', 's.palettePull', 's.underOpacity', 's.impastoLight', 's.reliefScale', 's.specular', 's.weave',
   's.varnish', 's.crackle', 's.vignette', 's.licStrength', 's.contour', 's.rain',
+  's.experimentScale', 's.experimentStrength',
   'c.bristleDensity', 'c.freshPaint', 'c.etfIterations', 'c.relaxIterations', 'c.flowLevels', 'c.flowIterations',
 ].forEach(reg);
 
 const openState = { Brush: true, Strokes: true };
 let refreshers = [];
+let controlId = 0;
 
 function changed(look) {
+  if (exporting) return;
   if (look) painter.set('s.enabled', 1);
   if (src.kind && src.kind !== 'image' && !video.paused) painter.resetTemporal();
   requestPaint();
@@ -495,8 +568,9 @@ function decimals(step) { return step >= 1 ? 0 : step >= 0.1 ? 1 : 2; }
 function slider(parent, o) {
   const step = o.step ?? (o.int ? 1 : (o.max - o.min) <= 2 ? 0.01 : (o.max - o.min) <= 20 ? 0.1 : 1);
   const out = el('output');
-  const input = el('input', { type: 'range', min: o.min, max: o.max, step, 'aria-label': o.label });
-  const field = el('div', { class: 'field', title: o.help || '' }, el('label', {}, o.label), out, input);
+  const id = `setting-${++controlId}`;
+  const input = el('input', { id, type: 'range', min: o.min, max: o.max, step, 'aria-label': o.label });
+  const field = el('div', { class: 'field', title: o.help || '' }, el('label', { for: id }, o.label), out, input);
   const def = () => o.def !== undefined ? (typeof o.def === 'function' ? o.def() : o.def) : defaults[o.key];
   const show = v => {
     out.textContent = (o.int ? String(Math.round(v)) : v.toFixed(o.dp ?? decimals(step))) + (o.unit || '');
@@ -508,7 +582,11 @@ function slider(parent, o) {
     const v = painter.get(o.key);
     input.value = String(v);
     show(v);
-    if (o.enabled) field.classList.toggle('disabled', !o.enabled());
+    if (o.enabled) {
+      input.disabled = !o.enabled();
+      out.setAttribute('aria-disabled', String(input.disabled));
+      field.classList.toggle('disabled', input.disabled);
+    }
   };
   input.addEventListener('input', () => {
     const v = Number(input.value);
@@ -524,6 +602,7 @@ function slider(parent, o) {
   };
   field.addEventListener('dblclick', reset);
   out.addEventListener('click', () => {
+    if (input.disabled || exporting) return;
     const t = prompt(o.label, out.textContent.replace(/[^\d.\-]/g, ''));
     if (t === null || t.trim() === '' || Number.isNaN(Number(t))) return;
     const v = Math.min(o.max, Math.max(o.min, Number(t)));
@@ -535,24 +614,25 @@ function slider(parent, o) {
   return field;
 }
 
-function toggle(parent, label, get, set, help) {
+function toggle(parent, label, get, set, help, enabled) {
   const input = el('input', { type: 'checkbox', role: 'switch' });
   const t = el('label', { class: 'toggle', title: help || '' }, label, input);
-  const refresh = () => { input.checked = get(); };
+  const refresh = () => { input.checked = get(); input.disabled = enabled ? !enabled() : false; t.classList.toggle('disabled', input.disabled); };
   input.addEventListener('change', () => { set(input.checked); refreshAll(); });
   refreshers.push(refresh);
   refresh();
   parent.append(t);
 }
 
-function select(parent, label, items, get, set) {
-  const s = el('select', { class: 'select', 'aria-label': label },
+function select(parent, label, items, get, set, enabled) {
+  const id = `setting-${++controlId}`;
+  const s = el('select', { id, class: 'select', 'aria-label': label },
     items.map((it, i) => el('option', { value: i }, it)));
-  const refresh = () => { s.value = String(get()); };
+  const refresh = () => { s.value = String(get()); s.disabled = enabled ? !enabled() : false; };
   s.addEventListener('change', () => { set(Number(s.value)); refreshAll(); });
   refreshers.push(refresh);
   refresh();
-  parent.append(el('label', { class: 'select-label' }, label), s);
+  parent.append(el('label', { class: 'select-label', for: id }, label), s);
 }
 
 function refreshAll() { refreshers.forEach(r => r()); }
@@ -569,9 +649,9 @@ function buildPanel() {
 
   // ── Brush ──
   let b = section('Brush', true);
-  const list = el('div', { class: 'brush-list', role: 'listbox', 'aria-label': 'Brush' });
+  const list = el('div', { class: 'brush-list', role: 'group', 'aria-label': 'Brush' });
   styles.forEach((s, i) => {
-    const item = el('button', { class: i === si ? 'on' : '', role: 'option', 'aria-selected': i === si ? 'true' : 'false',
+    const item = el('button', { class: i === si ? 'on' : '', 'aria-pressed': i === si ? 'true' : 'false',
       onclick: () => {
         painter.setStyle(i);
         buildPanel();
@@ -656,10 +736,12 @@ function buildPanel() {
   group(adv, 'Direction');
   select(adv, 'Direction source', ['Follow image', 'Swirl', 'Patches', 'Curl', 'Waves', 'Fixed angle'],
     () => Math.round(painter.get('s.fieldMode')), v => { painter.set('s.fieldMode', v); changed(true); });
-  slider(adv, { key: 's.fieldMix', label: 'Pattern strength', min: 0, max: 1, look: true, help: '0 = follow the image, 1 = follow the pattern.' });
+  caption(adv, 'Follow image uses the picture’s edges, with a fallback direction in flat areas. Pattern strength applies to the other direction sources.');
+  slider(adv, { key: 's.fieldMix', label: 'Pattern strength', min: 0, max: 1, look: true,
+    enabled: () => painter.get('s.fieldMode') > 0.5, help: '0 = follow the image, 1 = follow the pattern.' });
   slider(adv, { key: 's.perturb', label: 'Wobble', min: 0, max: 1.5, look: true });
   const swirl = () => Math.round(painter.get('s.fieldMode')) === 1;
-  toggle(adv, 'Centre swirl on brightest area', () => painter.get('s.autoVortex') > 0.5, v => { painter.set('s.autoVortex', v ? 1 : 0); changed(true); });
+  toggle(adv, 'Centre swirl on brightest area', () => painter.get('s.autoVortex') > 0.5, v => { painter.set('s.autoVortex', v ? 1 : 0); changed(true); }, 'Only applies to Swirl.', swirl);
   slider(adv, { key: 's.vortexSpiral', label: 'Spiral twist', min: -1.5, max: 1.5, look: true, enabled: swirl });
   slider(adv, { key: 's.vortexRadius', label: 'Swirl size', min: 0.05, max: 1, look: true, enabled: swirl });
   group(adv, 'Direction smoothing');
@@ -722,10 +804,27 @@ function buildPanel() {
                            ['s.contour', 'Outline strokes'], ['s.rain', 'Rain']])
     slider(b, { key: k, label: l, min: 0, max: 1, look: true, enabled: finishOn, help: h });
 
+  b = section('Experimental', painter.get('s.experimentEnabled') > 0.5);
+  const experimental = () => painter.get('s.experimentEnabled') > 0.5;
+  toggle(b, 'Experimental effects', experimental, v => {
+    painter.set('s.experimentEnabled', v ? 1 : 0);
+    changed(false);
+  }, 'Try developing algorithms. Turning this off restores the underlying painting.');
+  caption(b, 'Developing algorithms: results and performance may vary. Applied after painting; your brush settings stay editable.');
+  select(b, 'Experimental algorithm', ['Crosshatch engraving', 'CMYK screen print', 'Voronoi mosaic'],
+    () => Math.max(0, Math.round(painter.get('s.experimentMode')) - 1),
+    v => { painter.set('s.experimentMode', v + 1); changed(false); }, experimental);
+  slider(b, { key: 's.experimentScale', label: 'Effect scale', min: 3, max: 48, step: 1, unit: ' px', enabled: experimental });
+  slider(b, { key: 's.experimentStrength', label: 'Effect strength', min: 0, max: 1, enabled: experimental });
+
   // ── Video motion ──
   if (src.kind && src.kind !== 'image') {
     b = section('Video motion', true);
     caption(b, 'Applied while the video plays and while recording.');
+    caption(b, src.kind === 'video'
+      ? 'Export a silent MP4 at an estimated 10–60 fps (30 fps until measured). Export can be slower than playback and keeps the encoded file in memory.'
+      : 'Record silent painted camera video. Your browser chooses MP4 or WebM.');
+    if (src.kind === 'video') b.append(el('div', { class: 'caption', id: 'export-capability', role: 'status' }, $('record-btn').title));
     const steady = () => painter.get('p.frameDiffThreshold') > 0;
     toggle(b, 'Steady strokes', steady, v => {
       src.steadyTouched = true;
@@ -744,6 +843,7 @@ function buildPanel() {
         scaler.width = w; scaler.height = h; src.w = w; src.h = h;
         painter.resetTemporal();
         framePending = true; kick();
+        updateExportCapability();
       });
     caption(b, 'Smaller paints faster. Strokes keep their size in pixels, so a smaller frame also looks bolder.');
     adv = disclosure(b, 'video');
@@ -841,7 +941,11 @@ function wireView() {
 
 function setMode(m) {
   view.mode = m;
-  for (const b of $('view-mode').children) b.classList.toggle('on', Number(b.dataset.mode) === m);
+  for (const b of $('view-mode').children) {
+    const selected = Number(b.dataset.mode) === m;
+    b.classList.toggle('on', selected);
+    b.setAttribute('aria-pressed', String(selected));
+  }
   requestDraw();
 }
 
@@ -857,6 +961,10 @@ function notice(text, error = false, ms = error ? 6000 : 3000) {
 }
 
 function wireUi() {
+  $('settings-btn').onclick = () => {
+    const collapsed = document.body.classList.toggle('settings-collapsed');
+    $('settings-btn').setAttribute('aria-expanded', String(!collapsed));
+  };
   $('open-btn').onclick = $('empty-open').onclick = () => $('file-input').click();
   $('camera-btn').onclick = $('empty-camera').onclick = openCamera;
   $('file-input').onchange = e => { openFile(e.target.files[0]); e.target.value = ''; };
@@ -867,6 +975,26 @@ function wireUi() {
     const m = b.parentElement, was = m.classList.contains('open');
     closeMenus();
     m.classList.toggle('open', !was);
+    b.setAttribute('aria-expanded', String(!was));
+  }));
+  document.querySelectorAll('.menu > .btn').forEach(b => {
+    b.setAttribute('aria-expanded', 'false');
+    b.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault(); closeMenus();
+      b.parentElement.classList.add('open'); b.setAttribute('aria-expanded', 'true');
+      const items = b.parentElement.querySelectorAll('[role=menuitem]');
+      items[e.key === 'ArrowUp' ? items.length - 1 : 0]?.focus();
+    });
+  });
+  document.querySelectorAll('.menu-list').forEach(menu => menu.addEventListener('keydown', e => {
+    const items = [...menu.querySelectorAll('[role=menuitem]')];
+    const at = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus();
+    }
   }));
   document.addEventListener('click', closeMenus);
   $('save-look').onclick = () => { closeMenus(); saveLook(); };
@@ -900,7 +1028,13 @@ function wireUi() {
   });
 
   document.addEventListener('keydown', e => {
-    if (e.target.closest('input[type=text], .text-input, select')) return;
+    if (e.key === 'Escape') {
+      const trigger = document.querySelector('.menu.open > .btn');
+      closeMenus(); trigger?.focus();
+      return;
+    }
+    if (exporting) return;
+    if (e.target.closest('input, textarea, select, button, summary, [contenteditable]')) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key === 's') { e.preventDefault(); saveImage(); return; }
     if (mod && e.key === 'o') { e.preventDefault(); $('file-input').click(); return; }
@@ -915,6 +1049,8 @@ function wireUi() {
   });
   wireView();
 }
-function closeMenus() { document.querySelectorAll('.menu.open').forEach(m => m.classList.remove('open')); }
+function closeMenus() { document.querySelectorAll('.menu.open').forEach(m => {
+  m.classList.remove('open'); m.querySelector(':scope > .btn').setAttribute('aria-expanded', 'false');
+}); }
 
 main();

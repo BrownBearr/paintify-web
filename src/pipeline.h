@@ -211,7 +211,7 @@ private:
     // Ground for the style: toned ground + lay-in, flat print, or paper.
     void layStyleGround(TuningParams& p, const std::vector<float>& radii);
     // Smear / wash -> finish -> overlays, into m_finalTex.
-    void runPost();
+    void runPost(bool styleEffects);
     // autoVortex: re-centre Turner's vortex on the frame's brightest region.
     void trackVortex(bool smooth);
     float m_vortexEma[2] = {-1.f, -1.f};

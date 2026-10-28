@@ -67,6 +67,11 @@ jobs:
           styles="none tempera sfumato chiaroscuro dutch rococo ukiyoe sumie watercolor monet seurat cezanne vangogh fauve expressionist cubism gestural pop hockney folk knife alla_prima pastel turner"
           node web/test/run.mjs out/brushes assets/sample.jpg $styles
 
+      - name: Export helper and rendering regressions
+        run: |
+          node --test web/test/video-export.mjs
+          node web/test/regression.mjs
+
       - name: Paint without the optional float32 features
         env:
           PAINTIFY_BASIC: "1"

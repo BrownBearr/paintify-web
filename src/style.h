@@ -179,6 +179,13 @@ struct StyleParams {
                           {1, 0, 1, 0}, {1, 0, 1, 0}, {1, 0, 1, 0}, {1, 0, 1, 0}};
     float layerB[8][4] = {{1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0},
                           {1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0}};
+
+    // Experimental final-output effects. Appended so legacy style-block data
+    // remains a byte-for-byte prefix of the current layout.
+    float experimentEnabled = 0.f;  // explicit opt-in gate
+    float experimentMode = 1.f;     // 1 hatch, 2 CMYK screen, 3 Voronoi mosaic
+    float experimentScale = 12.f;   // pattern size in image pixels
+    float experimentStrength = 1.f; // 0 = identity, 1 = full effect
 };
 static_assert(sizeof(StyleParams) % 16 == 0, "Style must stay vec4-aligned");
-static_assert(sizeof(StyleParams) == (33 + 16 + 8 + 8) * 16, "Style layout drifted from style.glsl");
+static_assert(sizeof(StyleParams) == (33 + 16 + 8 + 8 + 1) * 16, "Style layout drifted from style.glsl");

@@ -30,4 +30,52 @@ window.paintTest = async (imgUrl, styleKeys, settings = {}) => {
   return out;
 };
 window.ready = true;
+window.regressionTest = async imgUrl => {
+  const p = await startPainter({ base: '..' });
+  const img = await createImageBitmap(await (await fetch(imgUrl)).blob());
+  const canvas = new OffscreenCanvas(256, 256), ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, 256, 256);
+  await p.setSource(canvas, 256, 256);
+  const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const pixels = async () => { await p.render(); return new Uint8Array((await p.read()).data); };
+  const distance = (a, b) => a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0) / a.length;
+  const initial = p.saveLook();
+  check(p.get('s.experimentEnabled') === 0, 'Experimental must default off');
+  p.set('p.tensorSigma', 2.5); p.set('tensorOn', 1);
+  await p.render();
+  p.set('tensorOn', 0); await p.render();
+  check(p.get('p.tensorSigma') === 2.5, 'Off render lost smoothing amount');
+  const offLook = p.saveLook();
+  p.set('tensorOn', 1); await p.render();
+  check(p.get('p.tensorSigma') === 2.5, 'Reenable lost smoothing amount');
+  check(!p.loadLook(offLook), 'Off smoothing look failed to load');
+  check(p.get('tensorOn') === 0 && p.get('p.tensorSigma') === 2.5, 'Smoothing look did not preserve switch and amount');
+  p.loadLook(initial);
+  const base = await pixels();
+  const outputs = [];
+  p.set('s.experimentEnabled', 1);
+  for (const mode of [1, 2, 3]) {
+    p.set('s.experimentMode', mode);
+    const first = await pixels();
+    check(distance(first, base) > 1, `Mode ${mode} did not change pixels`);
+    check(first.some((v, i) => i % 4 !== 3 && v > 24), `Mode ${mode} is empty`);
+    // Force another render without changing the selected visual settings.
+    p.set('s.experimentEnabled', 0); await pixels();
+    p.set('s.experimentEnabled', 1);
+    check(distance(first, await pixels()) === 0, `Mode ${mode} is not deterministic`);
+    outputs.push(first);
+  }
+  check(outputs.every((v, i) => outputs.slice(i + 1).every(o => distance(v, o) > 1)), 'Experimental algorithms must differ');
+  const look = p.saveLook();
+  check(!p.loadLook(initial), 'Initial look failed');
+  check(p.get('s.experimentEnabled') === 0, 'Loading base look retained experiment state');
+  check(!p.loadLook(look), 'Experimental look failed');
+  check(p.get('s.experimentEnabled') === 1 && p.get('s.experimentMode') === 3, 'Experimental look lost settings');
+  const legacy = look.replace(/^# paintify-tensor-on=.*\n/m, '').replace(/^style-block (.*)$/m, (_, values) => 'style-block ' + values.split(' ').slice(0, 260).join(' '));
+  check(!p.loadLook(legacy), 'Legacy style-block rejected');
+  check(p.get('s.experimentEnabled') === 0 && p.get('s.experimentScale') === 12, 'Legacy look did not default experimental settings');
+  p.loadLook(initial);
+  check(distance(base, await pixels()) === 0, 'Gate-off/base restoration changed output');
+  return { checks: 'smoothing, legacy/current looks, three distinct deterministic algorithms, classic brush, gate-off identity', differences: outputs.map(o => distance(o, base)) };
+};
 </script>

@@ -372,25 +372,26 @@ void Pipeline::layStyleGround(TuningParams& p, const std::vector<float>& radii) 
 
 // Smear or wash -> finish -> overlays, always into m_finalTex. Nothing here
 // writes the canvas, which is the painting state the next frame starts from.
-void Pipeline::runPost() {
+void Pipeline::runPost(bool styleEffects) {
     const uint32_t gx = divUp(uint32_t(m_w), 16), gy = divUp(uint32_t(m_h), 16);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     GLuint color = m_canvasTex;
 
     m_post.use();
     glUniform1i(m_post.uniform("uFlatValid"), m_flatValid ? 1 : 0);
+    glUniform1i(m_post.uniform("uStyleEnabled"), styleEffects ? 1 : 0);
     glBindTextureUnit(UNIT_B, m_gradTex);
     glBindTextureUnit(UNIT_C, m_flatTex);
     glBindTextureUnit(UNIT_D, m_toothTex);
     glBindTextureUnit(UNIT_BRUSH, m_srcTex);   // unit 4 = uSrc in post.comp
 
-    if (m_style.watercolor > 0.f && m_flatValid) {
+    if (styleEffects && m_style.watercolor > 0.f && m_flatValid) {
         glUniform1i(m_post.uniform("uPass"), 1);
         glBindImageTexture(0, m_postTmpTex, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
         glDispatchCompute(gx, gy, 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
         color = m_postTmpTex;
-    } else if (m_style.licStrength > 0.f) {
+    } else if (styleEffects && m_style.licStrength > 0.f) {
         glUniform1i(m_post.uniform("uPass"), 0);
         glBindTextureUnit(UNIT_A, m_canvasTex);
         glBindImageTexture(0, m_postTmpTex, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
@@ -399,7 +400,7 @@ void Pipeline::runPost() {
         color = m_postTmpTex;
     }
 
-    if (m_style.finish > 0.f) {
+    if (styleEffects && m_style.finish > 0.f) {
         m_finish.use();
         glBindTextureUnit(UNIT_A, color);
         glBindTextureUnit(UNIT_B, m_heightTex);
@@ -413,10 +414,14 @@ void Pipeline::runPost() {
         glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
 
-    const bool overlays = m_style.contour > 0.f || m_style.outline > 0.f ||
-                          m_style.halftone > 0.f || m_style.caustics > 0.f ||
-                          m_style.bokashi > 0.f || m_style.rain > 0.f ||
-                          m_style.facet > 0.f || m_style.border > 0.f;
+    const bool experimentPass = m_style.experimentEnabled > 0.5f &&
+                                m_style.experimentStrength > 0.f &&
+                                m_style.experimentMode >= 1.f && m_style.experimentMode <= 3.f;
+    const bool overlays = experimentPass ||
+                          (styleEffects && (m_style.contour > 0.f || m_style.outline > 0.f ||
+                           m_style.halftone > 0.f || m_style.caustics > 0.f ||
+                           m_style.bokashi > 0.f || m_style.rain > 0.f ||
+                           m_style.facet > 0.f || m_style.border > 0.f));
     if (overlays) {
         m_post.use();
         glUniform1i(m_post.uniform("uPass"), 2);
@@ -1421,9 +1426,9 @@ void Pipeline::renderImpl(const TuningParams& base, const RenderConfig& cfg, boo
     endStage(m_tImpasto, m_ms.impasto);
 
     // --- brushkit finish + effects, into the output image ------------------
-    if (style) {
+    if (style || m_style.experimentEnabled > 0.5f) {
         m_tStyle.begin();
-        runPost();
+        runPost(style);
         endStage(m_tStyle, m_ms.style);
     }
 

@@ -4,9 +4,10 @@ import { createRequire } from 'node:module';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 const { chromium } = createRequire(import.meta.url)('playwright');
 
-const dist = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../dist');
+const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
 const outDir = process.argv[2] || 'ui-shots';
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json',
                 '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.webm': 'video/webm', '.ttf': 'font/ttf' };
