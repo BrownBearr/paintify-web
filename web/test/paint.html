@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Paintify web test</title>
+<script type="module">
+import { startPainter } from '../painter.js';
+window.paintTest = async (imgUrl, styleKeys, settings = {}) => {
+  const p = await startPainter({ base: '..' });
+  const img = await createImageBitmap(await (await fetch(imgUrl)).blob());
+  const c = new OffscreenCanvas(img.width, img.height), cx = c.getContext('2d');
+  cx.drawImage(img, 0, 0);
+  const rgba = cx.getImageData(0, 0, img.width, img.height).data;
+  await p.setSourcePixels(new Uint8Array(rgba.buffer), img.width, img.height);
+  const out = {};
+  for (const key of styleKeys) {
+    const idx = key === 'none' ? 0 : p.styles.findIndex(s => s.key === key);
+    p.setStyle(idx);
+    for (const [k, v] of Object.entries(settings)) p.set(k, v);
+    const t0 = performance.now();
+    for (let i = 0; i < 3; i++) await p.render();
+    const im = await p.read();
+    const ms = performance.now() - t0;
+    const oc = new OffscreenCanvas(im.width, im.height);
+    oc.getContext('2d').putImageData(im, 0, 0);
+    const blob = await oc.convertToBlob({ type: 'image/png' });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = ''; for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    const b64 = btoa(bin);
+    out[key] = { png: b64, ms, stats: p.stats() };
+  }
+  return out;
+};
+window.ready = true;
+</script>

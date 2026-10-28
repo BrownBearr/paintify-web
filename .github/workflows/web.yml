@@ -1,0 +1,94 @@
+name: Web
+
+# Builds the browser version (WebAssembly + WebGPU), paints every brush in
+# headless Chromium on SwiftShader, walks through the app, and publishes it
+# to GitHub Pages from main.
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EMSDK_VERSION: 6.0.13
+  NAGA_VERSION: 30.0.1
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shader tools
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools spirv-cross xvfb
+
+      - name: Cache naga
+        id: naga
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/naga
+          key: naga-${{ env.NAGA_VERSION }}
+      - name: Install naga
+        if: steps.naga.outputs.cache-hit != 'true'
+        run: cargo install naga-cli --version "$NAGA_VERSION" --locked
+
+      - name: Cache emsdk
+        id: emsdk
+        uses: actions/cache@v4
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ env.EMSDK_VERSION }}
+      - name: Install emsdk
+        if: steps.emsdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk ~/emsdk
+          ~/emsdk/emsdk install "$EMSDK_VERSION"
+
+      - name: Build
+        run: |
+          ~/emsdk/emsdk activate "$EMSDK_VERSION"
+          source ~/emsdk/emsdk_env.sh
+          web/build.sh
+
+      - name: Browser
+        run: |
+          npm install --no-save --prefix web playwright@1.56.1
+          npx --prefix web playwright install --with-deps chromium
+
+      - name: Paint every brush
+        run: |
+          styles="none tempera sfumato chiaroscuro dutch rococo ukiyoe sumie watercolor monet seurat cezanne vangogh fauve expressionist cubism gestural pop hockney folk knife alla_prima pastel turner"
+          node web/test/run.mjs out/brushes assets/sample.jpg $styles
+
+      - name: Walk through the app
+        run: xvfb-run -a node web/test/ui.mjs out/ui
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-test-output
+          path: out/
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
