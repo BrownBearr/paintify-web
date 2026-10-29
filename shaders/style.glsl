@@ -12,7 +12,6 @@ layout(std140, binding = 1) uniform Style {
     vec4 bkPal[16];
     vec4 bkLayerA[8];   // impasto x, dryout +, edge softness x, darkest value painted
     vec4 bkLayerB[8];   // width x, colour value x, field rotation, dry tooth +
-    vec4 bkExperiment;  // enabled, mode, pattern scale (px), strength
 };
 
 #define ST_ENABLED        bk[0].x
@@ -138,10 +137,6 @@ layout(std140, binding = 1) uniform Style {
 #define ST_AUTO_VORTEX    bk[32].x
 #define ST_BORDER         bk[32].y
 #define ST_REFRESH        bk[32].z
-#define ST_EXPERIMENT_ENABLED  bkExperiment.x
-#define ST_EXPERIMENT_MODE     bkExperiment.y
-#define ST_EXPERIMENT_SCALE    bkExperiment.z
-#define ST_EXPERIMENT_STRENGTH bkExperiment.w
 
 int  bkLayer()  { return clamp(int(CUR_LAYER + 0.5), 0, 7); }
 vec4 layerA()   { return bkLayerA[bkLayer()]; }

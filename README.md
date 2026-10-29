@@ -33,8 +33,6 @@ Play a video or point your camera and it is painted as it moves. Steady strokes 
 
 More than twenty brushes inspired by the history of painting: Van Gogh's rhythmic ridges, Monet's broken colour, Seurat's dots, Cézanne's flat hatching, a palette knife, watercolour, ukiyo-e, sumi-e and more. Then shape the look with stroke size, length, curvature, paint thickness and lighting. A split view shows the original and the painting side by side as you work.
 
-The **Experimental** settings section offers three developing algorithms: tone-driven crosshatch engraving, rotated CMYK ink screens, and a simplified Voronoi mosaic. The explicit toggle starts off. Choose a scale and strength; turn the toggle off to return to the underlying painting. These effects are separate from brush materials and may vary in quality or performance. Saved looks include their experimental state, and loading an enabled look displays a notice.
-
 <p align="center">
   <img src="docs/media/brushes-cat.jpg" width="820" alt="The same photo of a cat painted with four different brushes">
 </p>

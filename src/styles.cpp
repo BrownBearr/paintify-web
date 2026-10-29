@@ -716,8 +716,7 @@ void applyBrushTexture(int index, StyleParams& st) {
         const size_t tail = offsetof(StyleParams, flatMottle);
         const bool lookChanged =
             std::memcmp(current + begin, baseline + begin, seed - begin) != 0 ||
-            std::memcmp(current + tail, baseline + tail,
-                        offsetof(StyleParams, experimentEnabled) - tail) != 0;
+            std::memcmp(current + tail, baseline + tail, sizeof(StyleParams) - tail) != 0;
         st.enabled = lookChanged ? 1.f : 0.f;
     } else if (st.finish <= 0.f) {
         st.finish = 0.5f; // brush relief only; no aging or ground effects

@@ -65,7 +65,6 @@ const Field kFields[] = {
     S(groundMode), S(underOpacity), S(finish), S(impastoLight), S(reliefScale), S(specular),
     S(weave), S(varnish), S(crackle), S(vignette), S(licStrength), S(contour), S(rain),
     S(brushModel), S(enabled),
-    S(experimentEnabled), S(experimentMode), S(experimentScale), S(experimentStrength),
     CF(bristleDensity), CF(freshPaint),
     CI(etfIterations), CI(relaxIterations), CI(flowLevels), CI(flowIterations), CI(passesPerLayer),
 };

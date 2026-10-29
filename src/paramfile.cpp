@@ -108,13 +108,7 @@ bool save(const std::string& path, const TuningParams& p, const RenderConfig& cf
     for (const Field& fl : kFields)
         f << fl.key << ' ' << (p.*fl.member) << '\n';
 
-    const StyleParams defaultStyle;
-    const bool experimentConfigured = st &&
-        (st->experimentEnabled > 0.5f ||
-         st->experimentMode != defaultStyle.experimentMode ||
-         st->experimentScale != defaultStyle.experimentScale ||
-         st->experimentStrength != defaultStyle.experimentStrength);
-    if (st && (st->enabled > 0.5f || experimentConfigured)) {
+    if (st && st->enabled > 0.5f) {
         f << "\n# brushkit style\n";
         if (!styleKey.empty()) f << "style " << styleKey << "\n";
         for (size_t i = 0; i < cfg.layerSpecs.size(); ++i) {
@@ -169,20 +163,8 @@ bool load(const std::string& path, TuningParams* p, RenderConfig* cfg,
             std::vector<float> vals;
             std::string tok;
             while (ls >> tok) vals.push_back(std::strtof(tok.c_str(), nullptr));
-            constexpr size_t kLegacyStyleFloats = (33 + 16 + 8 + 8) * 4;
-            constexpr size_t kCurrentStyleFloats = sizeof(StyleParams) / sizeof(float);
-            if (st && vals.size() == kCurrentStyleFloats) {
+            if (st && vals.size() == sizeof(StyleParams) / sizeof(float)) {
                 std::memcpy(st, vals.data(), sizeof(StyleParams));
-                if (haveStyle) *haveStyle = true;
-            } else if (st && vals.size() == kLegacyStyleFloats) {
-                // Older look files carry a prefix of the current layout.
-                // Newly added controls retain their off/default values.
-                const StyleParams defaults;
-                std::memcpy(st, vals.data(), sizeof(float) * kLegacyStyleFloats);
-                st->experimentEnabled = defaults.experimentEnabled;
-                st->experimentMode = defaults.experimentMode;
-                st->experimentScale = defaults.experimentScale;
-                st->experimentStrength = defaults.experimentStrength;
                 if (haveStyle) *haveStyle = true;
             } else if (st) {
                 ++unknown;   // written by a build with a different style layout

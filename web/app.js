@@ -499,7 +499,7 @@ function loadLookText(text, name) {
   if (busy()) return;
   const err = painter.loadLook(text);
   if (err) { notice(`${name}: ${err}`, true); return; }
-  notice(`Opened look ${name}${painter.get('s.experimentEnabled') > 0.5 ? ' · Experimental effects enabled' : ''}`);
+  notice(`Opened look ${name}`);
   buildPanel();
   requestPaint();
 }
@@ -530,7 +530,6 @@ const reg = k => { if (!ALL_KEYS.includes(k)) ALL_KEYS.push(k); return k; };
   's.fieldMix', 's.perturb', 's.vortexSpiral', 's.vortexRadius', 's.saturation', 's.warmCool', 's.labJitterL',
   's.labJitterAB', 's.palettePull', 's.underOpacity', 's.impastoLight', 's.reliefScale', 's.specular', 's.weave',
   's.varnish', 's.crackle', 's.vignette', 's.licStrength', 's.contour', 's.rain',
-  's.experimentScale', 's.experimentStrength',
   'c.bristleDensity', 'c.freshPaint', 'c.etfIterations', 'c.relaxIterations', 'c.flowLevels', 'c.flowIterations',
 ].forEach(reg);
 
@@ -804,19 +803,6 @@ function buildPanel() {
                            ['s.vignette', 'Vignette'], ['s.licStrength', 'Wet smear', 'Smears the finished painting along the stroke direction.'],
                            ['s.contour', 'Outline strokes'], ['s.rain', 'Rain']])
     slider(b, { key: k, label: l, min: 0, max: 1, look: true, enabled: finishOn, help: h });
-
-  b = section('Experimental', painter.get('s.experimentEnabled') > 0.5);
-  const experimental = () => painter.get('s.experimentEnabled') > 0.5;
-  toggle(b, 'Experimental effects', experimental, v => {
-    painter.set('s.experimentEnabled', v ? 1 : 0);
-    changed(false);
-  }, 'Try developing algorithms. Turning this off restores the underlying painting.');
-  caption(b, 'Developing algorithms: results and performance may vary. Applied after painting; your brush settings stay editable.');
-  select(b, 'Experimental algorithm', ['Crosshatch engraving', 'CMYK screen print', 'Voronoi mosaic'],
-    () => Math.max(0, Math.round(painter.get('s.experimentMode')) - 1),
-    v => { painter.set('s.experimentMode', v + 1); changed(false); }, experimental);
-  slider(b, { key: 's.experimentScale', label: 'Effect scale', min: 3, max: 48, step: 1, unit: ' px', enabled: experimental });
-  slider(b, { key: 's.experimentStrength', label: 'Effect strength', min: 0, max: 1, enabled: experimental });
 
   // ── Video motion ──
   if (src.kind && src.kind !== 'image') {

@@ -70,17 +70,6 @@ if (await page.getByRole('button', { name: 'Samples', exact: true }).getAttribut
 await page.keyboard.press('Escape');
 if (await page.getByRole('button', { name: 'Samples', exact: true }).getAttribute('aria-expanded') !== 'false') errors.push('Escape did not close menu');
 
-await page.locator('.section > summary').filter({ hasText: /^Experimental$/ }).click();
-const experiment = page.getByRole('switch', { name: 'Experimental effects', exact: true });
-if (await experiment.isChecked()) errors.push('Experimental UI defaults on');
-await experiment.check();
-await paintIdle();
-for (const mode of ['0', '1', '2']) {
-  await page.getByLabel('Experimental algorithm', { exact: true }).selectOption(mode);
-  await paintIdle();
-  await shot(`experimental-${mode}`);
-}
-await experiment.uncheck();
 await paintIdle();
 
 await page.setViewportSize({ width: 390, height: 844 });
