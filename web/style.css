@@ -71,6 +71,7 @@ button { font: inherit; color: inherit; }
 .brand img { width: 24px; height: 24px; }
 .bar-group { display: flex; align-items: center; gap: 6px; }
 .bar-group.right { margin-left: auto; }
+.settings-btn { display: none; }
 .btn {
   height: 32px; padding: 0 12px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--border-subtle); background: var(--surface); font-weight: 500;
@@ -172,6 +173,12 @@ main { flex: 1; display: flex; min-height: 0; }
 .field output { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: var(--text); cursor: text; min-width: 3ch; text-align: right; }
 .field input[type=range] { grid-column: 1 / -1; }
 .field.disabled { opacity: .45; pointer-events: none; }
+.toggle.disabled, select:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+.export-progress { position: absolute; left: 16px; right: 16px; bottom: 12px; width: calc(100% - 32px); height: 8px; accent-color: var(--accent); }
+.stage:has(.export-progress:not([hidden])) .hud { bottom: 28px; }
 .field.changed label::after { content: ' •'; color: var(--accent); }
 
 input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 18px; background: transparent; margin: 0; cursor: pointer; }
@@ -205,12 +212,35 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 .accent-note { font-size: 12px; padding: 8px 10px; border-radius: 6px; background: var(--accent-tint); color: var(--text); }
 
 @media (max-width: 760px) {
+  body { height: 100dvh; }
   main { flex-direction: column; }
-  .panel { width: auto; height: 42%; border-left: 0; border-top: 1px solid var(--border-subtle); }
+  .stage { min-height: 150px; }
+  .panel { width: auto; height: 42%; max-height: 55%; border-left: 0; border-top: 1px solid var(--border-subtle); }
+  .settings-btn { display: inline-block; }
+  body.settings-collapsed .panel { display: none; }
   .bar { flex-wrap: wrap; height: auto; gap: 6px; padding: 6px 8px; }
+  .bar .btn, .segmented button { min-height: 40px; height: auto; }
+  .bar-group { gap: 4px; }
   .bar .btn { padding: 0 10px; }
   .segmented { margin: 0; }
   .bar-group.right { margin-left: 0; }
   .brand span, #samples { display: none; }
   .empty-card h1 { font-size: 22px; }
+  .empty { padding: 16px; overflow-y: auto; }
+  .empty-card p { font-size: 13px; margin-bottom: 12px; }
+  .empty-actions { flex-wrap: wrap; }
+  .empty-actions .btn, .small-btn, .brush-list button { min-height: 40px; }
+  .field input[type=range] { height: 32px; }
+  .toggle { min-height: 36px; }
+  .brush-list { max-height: 230px; }
+}
+@media (max-width: 760px) and (max-height: 520px) {
+  main { flex-direction: row; }
+  .panel { width: 280px; height: auto; max-height: none; border-top: 0; border-left: 1px solid var(--border-subtle); }
+  .stage { min-height: 0; }
+  .empty-card h1 { font-size: 18px; }
+  .empty-samples { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

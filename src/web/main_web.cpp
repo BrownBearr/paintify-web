@@ -168,6 +168,7 @@ EMSCRIPTEN_KEEPALIVE float pfy_get(const char* key) {
 EMSCRIPTEN_KEEPALIVE int pfy_set(const char* key, float v) {
     if (std::strcmp(key, "tensorOn") == 0) {
         g_tensorOn = v > 0.5f;
+        if (g_tensorOn && g_params.tensorSigma <= 0.f) g_params.tensorSigma = 0.5f;
         return 1;
     }
     if (std::strcmp(key, "c.underpaint") == 0) {
@@ -201,8 +202,9 @@ EMSCRIPTEN_KEEPALIVE void pfy_clear_layer_specs() { g_cfg.layerSpecs.clear(); }
 // did. `temporal` (video playing with steady strokes) always paints.
 EMSCRIPTEN_KEEPALIVE int pfy_render(int temporal) {
     if (!g_ready || g_pipe.width() <= 0) return 0;
-    g_params.tensorSigma = g_tensorOn ? std::max(0.1f, g_params.tensorSigma) : 0.f;
-    const bool painted = g_pipe.renderIfChanged(g_params, g_cfg, temporal != 0);
+    TuningParams renderParams = g_params;
+    renderParams.tensorSigma = g_tensorOn ? std::max(0.5f, g_params.tensorSigma) : 0.f;
+    const bool painted = g_pipe.renderIfChanged(renderParams, g_cfg, temporal != 0);
     g_params.frame += 1.f;
     // The stroke counters normally arrive a frame late; a still is painted
     // once, so fetch its own numbers now.
@@ -251,6 +253,9 @@ EMSCRIPTEN_KEEPALIVE const char* pfy_save_look() {
         while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) g_text.append(buf, n);
         std::fclose(f);
     }
+    // Keep the browser-only smoothing switch independent from its retained
+    // amount. Desktop readers ignore this ordinary paramfile comment.
+    g_text.insert(0, g_tensorOn ? "# paintify-tensor-on=1\n" : "# paintify-tensor-on=0\n");
     return g_text.c_str();
 }
 
@@ -274,9 +279,28 @@ EMSCRIPTEN_KEEPALIVE const char* pfy_load_look(const char* text) {
     } else {
         g_cfg.layerSpecs.clear();
         g_styleIdx = 0;
+        g_style = StyleParams{};
         styles::applyBrushTexture(0, g_style);
     }
-    g_tensorOn = g_params.tensorSigma > 0.f;
+    // Older looks have no web metadata, so retain their historical behavior.
+    // New web looks can keep an amount while explicitly saving the switch off.
+    const std::string contents(text);
+    const std::string enabled = "# paintify-tensor-on=1";
+    const std::string disabled = "# paintify-tensor-on=0";
+    bool foundTensorSwitch = false;
+    size_t lineStart = 0;
+    while (lineStart < contents.size()) {
+        const size_t lineEnd = contents.find('\n', lineStart);
+        const size_t length = (lineEnd == std::string::npos ? contents.size() : lineEnd) - lineStart;
+        std::string line = contents.substr(lineStart, length);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line == enabled) { g_tensorOn = true; foundTensorSwitch = true; break; }
+        if (line == disabled) { g_tensorOn = false; foundTensorSwitch = true; break; }
+        if (lineEnd == std::string::npos) break;
+        lineStart = lineEnd + 1;
+    }
+    if (!foundTensorSwitch) g_tensorOn = g_params.tensorSigma > 0.f;
+    if (g_tensorOn && g_params.tensorSigma <= 0.f) g_params.tensorSigma = 0.5f;
     g_pipe.setStyle(g_style);
     g_pipe.resetTemporal();
     g_text.clear();

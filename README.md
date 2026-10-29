@@ -27,7 +27,7 @@ Open the page, drop in a photo or a video, or turn on your camera, and watch it 
 
 ## Made for motion
 
-Play a video or point your camera and it is painted as it moves. Steady strokes keep the paint still where nothing moves, so footage doesn't flicker. When it looks right, export the whole video as an MP4, every frame painted, or record the camera as you go.
+Play a video or point your camera and it is painted as it moves. Steady strokes keep the paint still where nothing moves, so footage doesn't flicker. Export a silent painted MP4, or record the camera as you go (MP4 or WebM, depending on your browser). File export samples an estimated 10–60 fps, with a 30 fps fallback; it does not preserve audio or exact source timestamps. It can take longer than playback and holds the encoded file in memory. Use a smaller processing size for long videos. A supported WebCodecs encoder is required; Paintify reports unavailable configurations.
 
 ## Pick a brush
 

@@ -71,6 +71,16 @@ export class Display {
     this.device.queue.copyExternalImageToTexture({ source: image }, { texture: this.source }, [w, h]);
   }
 
+  // Recording/export displays borrow the main display's source texture.
+  // Dispose only resources this display owns.
+  destroy() {
+    this.ubo?.destroy();
+    this.ctx?.unconfigure();
+    this.bg = null;
+    this.painted = null;
+    this.source = null;
+  }
+
   // view: {zoom, focusX, focusY, wipe, mode, backdrop:[r,g,b]} in image
   // texels and CSS-independent units; returns the framing used.
   draw(painted, w, h, view) {
