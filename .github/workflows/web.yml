@@ -2,8 +2,7 @@ name: Web
 
 # Builds the browser version (WebAssembly + WebGPU), paints every brush in
 # headless Chromium on SwiftShader, walks through the app, and publishes it
-# from main to the gh-pages branch, which GitHub Pages serves at
-# paintify.shivav.com.
+# from main to the gh-pages branch, which GitHub Pages serves.
 on:
   push:
     branches: [main, "claude/**"]
@@ -87,7 +86,6 @@ jobs:
         run: |
           cd web/dist
           touch .nojekyll
-          echo paintify.shivav.com > CNAME
           git init -q -b gh-pages
           git add -A
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
