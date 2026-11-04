@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://brownbearr.github.io/paintify-web/"><b>Open Paintify</b></a>
+  <a href="https://paintify.shivav.com/"><b>Open Paintify</b></a>
 </p>
 
 <p align="center">
