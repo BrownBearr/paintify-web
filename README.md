@@ -22,6 +22,17 @@
 Open the page, drop in a photo or a video, or turn on your camera, and watch it painted stroke by stroke. Paintify follows the shapes and edges of your picture with a brush and lays paint down coarse to fine, the way a painter blocks in a canvas and then works up the detail. It all runs on your graphics card through WebGPU, so it is fast and private: nothing you open leaves your computer.
 
 <p align="center">
+  <a href="docs/media/demo.mp4"><img src="docs/media/app-ui.jpg" width="820" alt="The Paintify app: a painted espresso cup on the canvas, with the brush list and stroke controls in the panel on the right"></a><br>
+  <sub><a href="docs/media/demo.mp4"><b>▶ Watch the 40-second demo</b></a>: open a sample, compare with the split view, switch brushes, paint a video.</sub>
+</p>
+
+Switch to **Split** to drag a wipe between the original and the painting:
+
+<p align="center">
+  <img src="docs/media/split-view.webp" width="720" alt="Dragging the split-view wipe across the espresso photo, revealing the original on one side and the painting on the other">
+</p>
+
+<p align="center">
   <img src="docs/media/video-cat.webp" width="480" alt="A slow push-in on a cat's face, painted frame by frame in heavy oil strokes">
 </p>
 
@@ -35,6 +46,12 @@ More than twenty brushes inspired by the history of painting: Van Gogh's rhythmi
 
 <p align="center">
   <img src="docs/media/brushes-cat.jpg" width="820" alt="The same photo of a cat painted with four different brushes">
+</p>
+
+Each brush repaints the canvas the moment you pick it:
+
+<p align="center">
+  <img src="docs/media/brush-switch.webp" width="720" alt="Clicking through Rhythmic ridge, Pointillist dot, Palette knife and Watercolor edge in the brush list while the espresso painting updates">
 </p>
 
 ## What you need
