@@ -60,4 +60,4 @@ A current Chrome, Edge or Arc on Mac, Windows or ChromeOS, or Safari 26. Paintif
 
 ---
 
-<sub>Developers: see <a href="docs/BUILDING.md">building for the web</a>. Example photos: Chelsea the cat (Stefan van der Walt) and espresso cup (Rachel Michetti), both CC0; Falcon 9 launch (SpaceX), public domain. Fonts: Schibsted Grotesk and Geist Mono, SIL OFL 1.1. MP4 muxing: mp4-muxer, MIT.</sub>
+<sub>Paintify is MIT licensed (<a href="LICENSE">LICENSE</a>). Developers: see <a href="docs/BUILDING.md">building for the web</a>. Example photos: Chelsea the cat (Stefan van der Walt) and espresso cup (Rachel Michetti), both CC0; Falcon 9 launch (SpaceX), public domain. Fonts: Schibsted Grotesk and Geist Mono, SIL OFL 1.1. MP4 muxing: mp4-muxer, MIT.</sub>
