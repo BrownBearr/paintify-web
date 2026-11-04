@@ -162,7 +162,7 @@ function sourceReady(kind, name, w, h) {
   $('record-btn').textContent = kind === 'video' ? 'Export video' : 'Record';
   $('record-btn').title = kind === 'video' ? 'Paint every frame and save an MP4' : 'Record the painted camera';
   $('transport').hidden = kind !== 'video';
-  src.fps = 0; src.frameDeltas = [];
+  src.fps = 0; src.frameDeltas = []; src.blob = null; src.fileFps = 0;
   view.zoom = 1; view.focusX = view.focusY = -1;
   painter.resetTemporal();
   if (kind !== 'image' && !src.steadyTouched) painter.set('p.frameDiffThreshold', 12);
@@ -214,11 +214,26 @@ function watchFrames() {
   }
 }
 
+// Some files carry no duration (WebM written by MediaRecorder, live
+// captures); the browser reports Infinity until it has seen the end. Seeking
+// far past the end makes it scan there and learn the real length.
+async function resolveDuration() {
+  if (Number.isFinite(video.duration)) return;
+  await new Promise(res => {
+    const done = () => { if (Number.isFinite(video.duration)) { clearTimeout(t); video.removeEventListener('durationchange', done); res(); } };
+    const t = setTimeout(() => { video.removeEventListener('durationchange', done); res(); }, 10000);
+    video.addEventListener('durationchange', done);
+    video.currentTime = 1e101;
+  });
+  await new Promise(res => { video.addEventListener('seeked', res, { once: true }); video.currentTime = 0; });
+}
+
 async function startVideo(url, name) {
   video.srcObject = null;
   video.src = url;
   video.loop = true;
   await new Promise((res, rej) => { video.onloadeddata = res; video.onerror = () => rej(new Error('This video format cannot be played by the browser.')); });
+  await resolveDuration();
   const [w, h] = liveSize(video.videoWidth, video.videoHeight);
   scaler.width = w; scaler.height = h;
   sourceReady('video', name, w, h);
@@ -231,7 +246,7 @@ async function startVideo(url, name) {
 async function openVideo(blob, name) {
   stopRecording();
   stopLive();
-  try { await startVideo(URL.createObjectURL(blob), name); }
+  try { await startVideo(URL.createObjectURL(blob), name); src.blob = blob; }
   catch (e) { notice(e.message, true); }
 }
 
@@ -286,7 +301,7 @@ function updateTransport() {
 }
 let scrubbing = false;
 function togglePlay() {
-  if (src.kind !== 'video') return;
+  if (src.kind !== 'video' || exporting) return;
   if (video.paused) { painter.resetTemporal(); video.play(); } else video.pause();
   setTimeout(updateTransport, 0);
 }
@@ -354,49 +369,181 @@ function stopRecording() {
 // seeked to, painted and encoded with WebCodecs, so the result has every
 // frame at the source's rate however long the painting takes.
 const EXPORT_CODECS = [
-  { codec: 'avc1.640028', mux: 'avc' },     // H.264 High: plays everywhere
+  { codec: 'avc1.640028', mux: 'avc' },     // H.264 High 4.0: plays everywhere, up to 1080p
+  { codec: 'avc1.640033', mux: 'avc' },     // H.264 High 5.1: larger frames
   { codec: 'vp09.00.40.08', mux: 'vp9' },
   { codec: 'av01.0.08M.08', mux: 'av1' },
 ];
+const AUDIO_CODECS = [
+  { codec: 'mp4a.40.2', mux: 'aac', bitrate: 192000 },
+  { codec: 'opus', mux: 'opus', bitrate: 128000 },
+];
+const AUDIO_RATE = 48000;
+
+// An MP4 or MOV file's video frame rate, from its first video track's sample
+// count and duration; 0 when it is not such a file or does not say.
+function mp4FrameRate(buf) {
+  const dv = new DataView(buf), str = o => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+  const boxes = (start, end, fn) => {
+    for (let o = start; o + 8 <= end;) {
+      let size = dv.getUint32(o), head = 8;
+      if (size === 1) { size = Number(dv.getBigUint64(o + 8)); head = 16; }
+      else if (size === 0) size = end - o;
+      if (size < head || o + size > end) return;
+      if (fn(str(o + 4), o + head, o + size) === false) return;
+      o += size;
+    }
+  };
+  let fps = 0;
+  try {
+    boxes(0, buf.byteLength, (t, s, e) => {
+      if (t !== 'moov') return;
+      boxes(s, e, (t, s, e) => {
+        if (t !== 'trak' || fps) return;
+        let video = false, scale = 0, dur = 0, count = 0;
+        const walk = (s, e) => boxes(s, e, (t, s, e) => {
+          if (t === 'mdia' || t === 'minf' || t === 'stbl') walk(s, e);
+          else if (t === 'hdlr') video = str(s + 8) === 'vide';
+          else if (t === 'mdhd') {
+            const v1 = dv.getUint8(s) === 1;
+            scale = dv.getUint32(s + (v1 ? 20 : 12));
+            dur = v1 ? Number(dv.getBigUint64(s + 24)) : dv.getUint32(s + 16);
+          } else if (t === 'stsz') count = dv.getUint32(s + 8);
+        });
+        walk(s, e);
+        if (video && scale && dur && count > 1) fps = count * scale / dur;
+      });
+      return false;
+    });
+  } catch { return 0; }
+  return fps;
+}
+
+// The source's frame rate: from the file when it says, else the commonest
+// gap between frames seen while it played. If it has not played long enough
+// to tell, play it briefly (muted).
+async function measureFps() {
+  if (src.blob && !src.fileFps) {
+    try { src.fileFps = mp4FrameRate(await src.blob.arrayBuffer()) || -1; } catch { src.fileFps = -1; }
+  }
+  if (src.fileFps > 0) return Math.min(60, Math.max(10, Math.round(src.fileFps)));
+  if (src.frameDeltas.length < 5 && 'requestVideoFrameCallback' in video) {
+    const t = video.currentTime;
+    try { await video.play(); } catch { /* cannot play: fall back to 30 */ }
+    for (let k = 0; k < 40 && src.frameDeltas.length < 5 && !video.paused; k++) await new Promise(r => setTimeout(r, 25));
+    video.pause();
+    await seekTo(t);
+  }
+  const d = [...src.frameDeltas].sort((a, b) => a - b);
+  return d.length >= 5 ? Math.min(60, Math.max(10, Math.round(1 / d[d.length >> 1]))) : 30;
+}
+
+// The source's sound, decoded whole and resampled to 48 kHz, trimmed to
+// `seconds`; null when it has none or the browser cannot encode it.
+async function prepareAudio(blob, seconds) {
+  if (!blob || !window.AudioEncoder || !window.OfflineAudioContext) return null;
+  let buf;
+  try {
+    const ctx = new OfflineAudioContext(1, 1, AUDIO_RATE);
+    buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+  } catch { return null; }   // no audio track, or one the browser cannot decode
+  if (!buf || !buf.length) return null;
+  const channels = Math.min(2, buf.numberOfChannels);
+  for (const a of AUDIO_CODECS) {
+    const cfg = { codec: a.codec, sampleRate: buf.sampleRate, numberOfChannels: channels, bitrate: a.bitrate };
+    try {
+      if ((await AudioEncoder.isConfigSupported(cfg)).supported)
+        return { buf, channels, cfg, mux: a.mux, frames: Math.min(buf.length, Math.round(seconds * buf.sampleRate)) };
+    } catch { /* next */ }
+  }
+  return null;
+}
+
+async function encodeAudio(audio, muxer) {
+  let failure = null;
+  const enc = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: e => { failure = e; } });
+  enc.configure(audio.cfg);
+  const { buf, channels, frames } = audio, rate = buf.sampleRate, step = 4800;
+  for (let off = 0; off < frames && !failure; off += step) {
+    const n = Math.min(step, frames - off);
+    const data = new Float32Array(n * channels);
+    for (let ch = 0; ch < channels; ch++) data.set(buf.getChannelData(ch).subarray(off, off + n), ch * n);
+    const ad = new AudioData({ format: 'f32-planar', sampleRate: rate, numberOfFrames: n, numberOfChannels: channels,
+                               timestamp: Math.round(off * 1e6 / rate), data });
+    enc.encode(ad);
+    ad.close();
+    if (enc.encodeQueueSize > 16) await new Promise(r => setTimeout(r, 0));
+  }
+  await enc.flush();
+  enc.close();
+  if (failure) throw failure;
+}
+
+// Seek and wait until the frame is there; a seek that never lands (the
+// source changed underneath) gives up rather than hanging the export.
+function seekTo(t) {
+  return new Promise((res, rej) => {
+    const timer = setTimeout(() => { video.removeEventListener('seeked', ok); rej(new Error('the video stopped seeking')); }, 10000);
+    const ok = () => { clearTimeout(timer); res(); };
+    video.addEventListener('seeked', ok, { once: true });
+    video.currentTime = t;
+  });
+}
 
 async function exportVideo() {
   if (exporting) { exporting.cancel = true; return; }
   if (!window.VideoEncoder) { notice('This browser cannot encode video (WebCodecs). Try Chrome, Edge or Safari.', true); return; }
-  const w = src.w, h = src.h;
-  const d = [...src.frameDeltas].sort((a, b) => a - b);
-  const fps = d.length >= 5 ? Math.min(60, Math.max(10, Math.round(1 / d[d.length >> 1]))) : 30;
-  const bitrate = Math.round(w * h * fps * 0.25);
-  let pick = null;
-  for (const c of EXPORT_CODECS) {
-    const cfg = { codec: c.codec, width: w, height: h, bitrate, framerate: fps };
-    try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) { pick = { ...c, cfg }; break; } } catch { /* next */ }
-  }
-  if (!pick) { notice('No video encoder is available in this browser.', true); return; }
-
-  const wasPlaying = !video.paused;
-  video.pause();
-  // window.paintifyExportLimit caps the frame count (the UI test sets it).
-  const total = Math.max(1, Math.min(window.paintifyExportLimit || Infinity, Math.floor(video.duration * fps)));
-  exporting = { done: 0, total, cancel: false };
+  if (!Number.isFinite(video.duration) || !(video.duration > 0)) { notice('This video does not say how long it is, so it cannot be exported.', true); return; }
   const btn = $('record-btn');
+  const w = src.w, h = src.h, source = video.src;
+  const wasPlaying = !video.paused;
+  exporting = { done: 0, total: 0, cancel: false };   // claims the painter before anything awaits
+  framePending = false;
   btn.textContent = 'Cancel export';
   btn.classList.add('recording');
-  const c = el('canvas', { style: 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none', 'aria-hidden': 'true' });
-  c.width = w; c.height = h;
-  document.body.append(c);
-  recDisplay = new Display(painter.device, c);
-  recDisplay.fixedSize = true;
-
-  const target = new ArrayBufferTarget();
-  const muxer = new Muxer({ target, fastStart: 'in-memory', video: { codec: pick.mux, width: w, height: h, frameRate: fps } });
-  let failure = null;
-  const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { failure = e; } });
-  encoder.configure(pick.cfg);
-  const steady = painter.get('p.frameDiffThreshold') > 0;
-  painter.resetTemporal();
+  $('scrub').disabled = $('play-btn').disabled = true;
+  let c = null, encoder = null, audio = null, fps = 30, total = 0;
   try {
+    fps = await measureFps();
+    video.pause();
+    const bitrate = Math.round(w * h * fps * 0.25);
+    let pick = null;
+    for (const k of EXPORT_CODECS) {
+      const cfg = { codec: k.codec, width: w, height: h, bitrate, framerate: fps };
+      try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) { pick = { ...k, cfg }; break; } } catch { /* next */ }
+    }
+    if (!pick) throw new Error('no video encoder in this browser can write this size');
+
+    // Every frame of the source, start to end. window.paintifyExportLimit
+    // caps the frame count (the UI test sets it).
+    total = Math.max(1, Math.min(window.paintifyExportLimit || Infinity, Math.round(video.duration * fps)));
+    exporting.total = total;
+    updateHud();
+    audio = await prepareAudio(src.blob, total / fps);
+    if (exporting.cancel) throw null;
+
+    c = el('canvas', { style: 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none', 'aria-hidden': 'true' });
+    c.width = w; c.height = h;
+    document.body.append(c);
+    recDisplay = new Display(painter.device, c);
+    recDisplay.fixedSize = true;
+
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target, fastStart: 'in-memory', firstTimestampBehavior: 'offset',
+      video: { codec: pick.mux, width: w, height: h, frameRate: fps },
+      audio: audio ? { codec: audio.mux, numberOfChannels: audio.channels, sampleRate: audio.buf.sampleRate } : undefined,
+    });
+    if (audio) await encodeAudio(audio, muxer);
+
+    let failure = null;
+    encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { failure = e; } });
+    encoder.configure(pick.cfg);
+    const steady = painter.get('p.frameDiffThreshold') > 0;
+    painter.resetTemporal();
     for (let i = 0; i < total && !exporting.cancel && !failure; i++) {
-      await new Promise(res => { video.addEventListener('seeked', res, { once: true }); video.currentTime = Math.min(video.duration, (i + 0.5) / fps); });
+      await seekTo(Math.min(video.duration, (i + 0.5) / fps));
+      if (exporting.cancel) break;
       scaler.getContext('2d').drawImage(video, 0, 0, w, h);
       await painter.setSource(scaler, w, h);
       display.setSource(scaler, w, h);
@@ -410,24 +557,28 @@ async function exportVideo() {
       updateHud();
     }
     if (failure) throw failure;
-    if (!exporting.cancel) {
-      await encoder.flush();
-      muxer.finalize();
-      download(new Blob([target.buffer], { type: 'video/mp4' }), `${src.name}-painted.mp4`);
-      notice(`Exported ${total} frames at ${fps} fps.`);
-    } else notice('Export cancelled.');
+    if (exporting.cancel) throw null;
+    await encoder.flush();
+    muxer.finalize();
+    download(new Blob([target.buffer], { type: 'video/mp4' }), `${src.name}-painted.mp4`);
+    notice(`Exported ${(total / fps).toFixed(1)} s: ${total} frames at ${fps} fps${audio ? ', with sound' : ''}.`);
   } catch (e) {
-    console.error(e);
-    notice(`Export failed: ${e.message}`, true);
+    if (e === null || exporting?.cancel) notice('Export cancelled.');
+    else { console.error(e); notice(`Export failed: ${e.message}`, true); }
   } finally {
-    try { encoder.close(); } catch { /* closed */ }
-    c.remove();
+    try { encoder?.close(); } catch { /* closed */ }
+    c?.remove();
     recDisplay = null;
     exporting = null;
-    btn.textContent = 'Export video';
-    btn.classList.remove('recording');
+    $('scrub').disabled = $('play-btn').disabled = false;
     painter.resetTemporal();
-    if (src.kind === 'video') { video.currentTime = 0; if (wasPlaying) video.play(); }
+    // Put the player back as it was, unless another source replaced it.
+    btn.classList.remove('recording');
+    if (src.kind === 'video') btn.textContent = 'Export video';
+    if (src.kind === 'video' && video.src === source) {
+      video.currentTime = 0;
+      if (wasPlaying) video.play().catch(() => {});
+    }
     updateHud();
   }
 }
