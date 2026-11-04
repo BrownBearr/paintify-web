@@ -55,16 +55,25 @@ export class Painter {
     return r;
   }
   get(key) { return this.withString(key, p => this.M._pfy_get(p)); }
-  set(key, v) { return this.withString(key, p => this.M._pfy_set(p, v)); }
+  set(key, v) {
+    if (key === 'p.frameDiffThreshold') this.staleTemporal = true;   // the C++ side resets on it
+    return this.withString(key, p => this.M._pfy_set(p, v));
+  }
   styleDefault(key) { return this.withString(key, p => this.M._pfy_style_default(p)); }
-  setStyle(i) { this.M._pfy_set_style(i); }
+  setStyle(i) { this.M._pfy_set_style(i); this.staleTemporal = true; }
   get style() { return this.M._pfy_style(); }
   get radii() { return this.str(this.M._pfy_radii); }
   set radii(text) { this.withString(text, p => this.M._pfy_set_radii(p)); }
   get width() { return this.M._pfy_width(); }
   get height() { return this.M._pfy_height(); }
   stats() { return JSON.parse(this.str(this.M._pfy_stats)); }
-  resetTemporal() { this.M._pfy_reset_temporal(); }
+  // Dropping the previous frame has to stick. A video frame may be painting
+  // right now, suspended on a GPU read-back, and it marks its own result as
+  // the previous frame when it finishes; a reset made meanwhile would be
+  // undone, and steady strokes would then keep the old brush or look
+  // wherever the picture is still. So the reset is made again just before
+  // the next paint starts.
+  resetTemporal() { this.M._pfy_reset_temporal(); this.staleTemporal = true; }
 
   // `source`: ImageBitmap, HTMLVideoElement, VideoFrame or canvas. It is
   // copied straight into the source texture on the GPU.
@@ -83,7 +92,10 @@ export class Painter {
     });
   }
   render(temporal = false) {
-    return this.run(() => this.M.ccall('pfy_render', 'number', ['number'], [temporal ? 1 : 0], { async: true }));
+    return this.run(() => {
+      if (this.staleTemporal) { this.staleTemporal = false; this.M._pfy_reset_temporal(); }
+      return this.M.ccall('pfy_render', 'number', ['number'], [temporal ? 1 : 0], { async: true });
+    });
   }
   // The painting as RGBA8 (top row first).
   read() {
@@ -105,5 +117,8 @@ export class Painter {
     return { output: out && out.tex };
   }
   saveLook() { return this.str(this.M._pfy_save_look); }
-  loadLook(text) { return this.withString(text, p => this.M.UTF8ToString(this.M._pfy_load_look(p))); }
+  loadLook(text) {
+    this.staleTemporal = true;
+    return this.withString(text, p => this.M.UTF8ToString(this.M._pfy_load_look(p)));
+  }
 }
