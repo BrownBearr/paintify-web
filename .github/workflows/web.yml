@@ -57,10 +57,20 @@ jobs:
           source ~/emsdk/emsdk_env.sh
           web/build.sh
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paintify-web-preview
+          path: web/dist/
+
       - name: Browser
         run: |
           npm install --no-save --prefix web playwright@1.56.1
           npx --prefix web playwright install --with-deps chromium
+
+      - name: Export helper and rendering regressions
+        run: |
+          node --test web/test/video-export.mjs
+          node web/test/regression.mjs
 
       - name: Paint every brush
         run: |

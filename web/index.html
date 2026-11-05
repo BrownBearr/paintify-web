@@ -26,10 +26,10 @@
       </div>
     </div>
   </div>
-  <div class="segmented" id="view-mode" role="tablist" aria-label="View">
-    <button data-mode="0" class="on" title="The painting (1)">Painted</button>
-    <button data-mode="1" title="Original and painting with a wipe (2)">Split</button>
-    <button data-mode="2" title="The original (3)">Original</button>
+  <div class="segmented" id="view-mode" role="group" aria-label="View">
+    <button data-mode="0" class="on" aria-pressed="true" title="The painting (1)">Painted</button>
+    <button data-mode="1" aria-pressed="false" title="Original and painting with a wipe (2)">Split</button>
+    <button data-mode="2" aria-pressed="false" title="The original (3)">Original</button>
   </div>
   <div class="bar-group right">
     <div class="menu" id="look-menu">
@@ -42,6 +42,7 @@
     </div>
     <button class="btn" id="record-btn" disabled title="Record the painted video">Record</button>
     <button class="btn primary" id="save-btn" disabled title="Save the painting as a PNG (⌘S)">Save image</button>
+    <button class="btn settings-btn" id="settings-btn" aria-controls="panel" aria-expanded="true">Settings</button>
   </div>
 </header>
 
@@ -72,8 +73,9 @@
       <span class="time mono" id="time">0:00</span>
     </div>
     <div class="hud mono" id="hud"></div>
-    <div class="notice" id="notice" hidden></div>
-    <div class="loading" id="loading"><div class="spinner"></div><span>Starting the painter…</span></div>
+    <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+    <progress id="export-progress" class="export-progress" aria-label="Video export progress" hidden></progress>
+    <div class="loading" id="loading" role="status"><div class="spinner"></div><span>Starting the painter…</span></div>
   </section>
   <aside class="panel" id="panel" aria-label="Settings"></aside>
 </main>

@@ -11,11 +11,12 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 const SLOT = { storage: 0, uniform: 16, defaultBlock: 20, texture: 24, sampler: 40, image: 56,
                readTexture: 72, readSampler: 88 };
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const shaderDir = path.join(root, 'shaders');
 const outFile = process.argv[2] || path.join(root, 'web/build/shaders.json');
 const glslang = process.env.GLSLANG || 'glslangValidator';

@@ -6,8 +6,9 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [outDir, image, ...rest] = process.argv.slice(2);
 // key=value arguments are settings (e.g. c.relaxIterations=2), the rest brushes.
 const settings = Object.fromEntries(rest.filter(a => a.includes('=')).map(a => [a.split('=')[0], Number(a.split('=')[1])]));

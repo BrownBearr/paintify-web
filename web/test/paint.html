@@ -30,4 +30,31 @@ window.paintTest = async (imgUrl, styleKeys, settings = {}) => {
   return out;
 };
 window.ready = true;
+window.regressionTest = async imgUrl => {
+  const p = await startPainter({ base: '..' });
+  const img = await createImageBitmap(await (await fetch(imgUrl)).blob());
+  const canvas = new OffscreenCanvas(256, 256), ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, 256, 256);
+  await p.setSource(canvas, 256, 256);
+  const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const initial = p.saveLook();
+  p.set('p.tensorSigma', 2.5); p.set('tensorOn', 1);
+  await p.render();
+  p.set('tensorOn', 0); await p.render();
+  check(p.get('p.tensorSigma') === 2.5, 'Off render lost smoothing amount');
+  const offLook = p.saveLook();
+  p.set('tensorOn', 1); await p.render();
+  check(p.get('p.tensorSigma') === 2.5, 'Reenable lost smoothing amount');
+  check(!p.loadLook(offLook), 'Off smoothing look failed to load');
+  check(p.get('tensorOn') === 0 && p.get('p.tensorSigma') === 2.5, 'Smoothing look did not preserve switch and amount');
+  check(!p.loadLook(initial), 'Initial look failed to load');
+  p.setStyle(p.styles.findIndex(s => s.key === 'vangogh'));
+  const styledLook = p.saveLook();
+  check(styledLook.includes('style-block '), 'Styled look has no style block');
+  const legacy = styledLook.replace(/^# paintify-tensor-on=.*\n/m, '');
+  check(!p.loadLook(legacy), 'Original-format styled look failed to load');
+  check(!p.loadLook(styledLook), 'Current styled look failed to load');
+  check(!p.loadLook(initial), 'Base look failed to load');
+  return { checks: 'smoothing retention and switch state, original/current styled looks, base look restoration' };
+};
 </script>
